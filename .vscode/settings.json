@@ -1,6 +1,9 @@
 {
     "files.associations": {
         "*.json": "jsonc",
-        "leaf_page.h": "c"
+        "leaf_page.h": "c",
+        "buffer_pool.h": "c",
+        "page.h": "c",
+        "string.h": "c"
     }
 }
