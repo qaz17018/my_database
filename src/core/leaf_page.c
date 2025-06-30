@@ -64,7 +64,7 @@ Row *leaf_page_search(LeafPage *page, uint32_t id)
 // [修改] 函数签名匹配头文件
 int leaf_page_insert_or_split(uint32_t space_id, uint32_t page_no, const Row *row, uint32_t *out_new_page_no, uint32_t *out_split_key)
 {
-    LeafPage *page = (LeafPage *)buf_get_page(space_id, page_no, PAGE_TYPE_DATA);
+    LeafPage *page = (LeafPage *)buf_get_page(space_id, page_no, PAGE_TYPE_LEAF);
 
     // 如果当前页未满，直接插入
     if (page->num_records < MAX_LEAF_RECORDS)
@@ -78,7 +78,7 @@ int leaf_page_insert_or_split(uint32_t space_id, uint32_t page_no, const Row *ro
 
     // 1. 分配一个新页
     uint32_t new_page_no;
-    LeafPage *new_page = (LeafPage *)buf_alloc_page(space_id, PAGE_TYPE_DATA, &new_page_no);
+    LeafPage *new_page = (LeafPage *)buf_alloc_page(space_id, PAGE_TYPE_LEAF, &new_page_no);
     if (!new_page)
         return -1; // 分配失败
     *out_new_page_no = new_page_no;

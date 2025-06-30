@@ -1,13 +1,13 @@
 #include <stdio.h>
 #include <string.h>
-#include "../../src/core/buffer_pool.h"
+#include "../../src/include/buffer_pool.h"
 #include "../../src/include/row.h"
 
 int main()
 {
     buf_init();
     uint32_t space_id = 1;
-    RowPage *page = (RowPage *)buf_get_page(space_id, 0, PAGE_TYPE_DATA);
+    RowPage *page = (RowPage *)buf_get_page(space_id, 0, PAGE_TYPE_LEAF);
 
     Row r1 = {.id = 1001, .name = "Alice"};
     Row r2 = {.id = 1002, .name = "Bob"};
@@ -19,7 +19,7 @@ int main()
     buf_flush_all();
 
     buf_init();
-    RowPage *reload = (RowPage *)buf_get_page(space_id, 0, PAGE_TYPE_DATA);
+    RowPage *reload = (RowPage *)buf_get_page(space_id, 0, PAGE_TYPE_LEAF);
 
     Row *found = row_page_find(reload, 1002);
     if (found)

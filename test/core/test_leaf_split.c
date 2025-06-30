@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h> // 引入断言库
-#include "../../src/core/buffer_pool.h"
+#include "../../src/include/buffer_pool.h"
 #include "../../src/include/leaf_page.h"
 
 int main()
@@ -40,8 +40,8 @@ int main()
     // --- 步骤3: 重新加载并验证数据 ---
     printf("\n--- Phase 3: Re-loading pages from disk and verifying data ---\n");
     buf_init(); // 清空缓存池，模拟重启
-    LeafPage *p0 = (LeafPage *)buf_get_page(space_id, root_page_no, PAGE_TYPE_DATA);
-    LeafPage *p1 = (LeafPage *)buf_get_page(space_id, new_page_no, PAGE_TYPE_DATA);
+    LeafPage *p0 = (LeafPage *)buf_get_page(space_id, root_page_no, PAGE_TYPE_LEAF);
+    LeafPage *p1 = (LeafPage *)buf_get_page(space_id, new_page_no, PAGE_TYPE_LEAF);
 
     // 验证记录数
     printf("Verifying record counts...\n");

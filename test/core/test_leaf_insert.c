@@ -1,14 +1,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "../../src/core/buffer_pool.h"
+#include "../../src/include/buffer_pool.h"
 #include "../../src/include/leaf_page.h"
 
 int main()
 {
     buf_init();
     uint32_t space_id = 3;
-    LeafPage *page = (LeafPage *)buf_get_page(space_id, 0, PAGE_TYPE_DATA);
+    LeafPage *page = (LeafPage *)buf_get_page(space_id, 0, PAGE_TYPE_LEAF);
 
     Row r1 = {.id = 103, .name = "Tom"};
     Row r2 = {.id = 101, .name = "Alice"};
@@ -22,7 +22,7 @@ int main()
     buf_flush_all();
 
     buf_init();
-    LeafPage *reload = (LeafPage *)buf_get_page(space_id, 0, PAGE_TYPE_DATA);
+    LeafPage *reload = (LeafPage *)buf_get_page(space_id, 0, PAGE_TYPE_LEAF);
 
     for (int i = 0; i < reload->num_records; i++)
     {

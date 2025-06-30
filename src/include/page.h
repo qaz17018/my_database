@@ -8,8 +8,8 @@
 
 typedef enum
 {
-    PAGE_TYPE_DATA = 1,
-    PAGE_TYPE_INDEX = 2,
+    PAGE_TYPE_LEAF = 1,     // [修改] 为了更清晰，将DATA改为LEAF
+    PAGE_TYPE_INTERNAL = 2, // [新增] 内节点类型
     PAGE_TYPE_FREE = 3
 } PageType;
 
