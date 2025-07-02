@@ -46,6 +46,21 @@ int internal_page_insert(uint32_t space_id, uint32_t page_no, InternalPage *page
     }
 
     int pos = 0;
+    while (pos < page->num_entries && page->entries[pos].key < key)
+    {
+        pos++;
+    }
+
+    for (int i = page->num_entries; i > pos; i--)
+    {
+        page->entries[i] = page->entries[i - 1];
+    }
+
+    page->entries[pos].key = key;
+    page->entries[pos].child_page_no = child_page_no;
+    page->num_entries++;
+
+    buf_mark_dirty(space_id, page_no);
 
     return 0;
 }

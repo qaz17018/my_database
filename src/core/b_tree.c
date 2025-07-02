@@ -3,6 +3,12 @@
 #include "leaf_page.h"
 #include "internal_page.h"
 #include <stdio.h>
+#include <string.h>
+
+static BTreeMeta *get_meta(uint32_t space_id)
+{
+    return (BTreeMeta*) buf_get_page(space_id, 0, PAGE_TYPE_META);
+}
 
 static int b_tree_insert_internal(uint32_t space_id, uint32_t page_no, const Row *row)
 {
