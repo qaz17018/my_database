@@ -2,12 +2,11 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build B-Tree Insert for Debugging",
+            "label": "Make Debug Build",
             "type": "shell",
-            "command": "make",
-            "args": [
-                "debug_test_b_tree_insert"
-            ],
+            // 命令现在非常通用，只调用 make debug
+            // 具体构建哪个文件，由 launch.json 传来的变量决定
+            "command": "make debug TEST=${input:testName}",
             "group": {
                 "kind": "build",
                 "isDefault": true

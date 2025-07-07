@@ -2,10 +2,11 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug B-Tree Insert",
+            "name": "Debug C Program (Dynamic)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/out/test_b_tree_insert",
+            // "program" 不再是硬编码，而是使用了输入变量 ${input:testName}
+            "program": "${workspaceFolder}/out/${input:testName}_debug",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -19,10 +20,18 @@
                     "ignoreFailures": true
                 }
             ],
-            // "preLaunchTask" 会在启动调试前自动执行一个任务
-            // 我们让它自动执行 "make debug_test_b_tree_insert"
-            "preLaunchTask": "Build B-Tree Insert for Debugging"
+            // preLaunchTask 现在指向我们新的通用任务
+            "preLaunchTask": "Make Debug Build"
         }
-        // 你可以仿照上面的结构，为其他测试（如 test_leaf_split）添加更多的调试配置
+    ],
+    // "inputs" 是这次改造的核心！
+    "inputs": [
+        {
+            // 定义一个ID为 "testName" 的输入变量
+            "id": "testName",
+            "type": "promptString",
+            "description": "Enter the name of the test file to debug (e.g., test_b_tree_insert)",
+            "default": "test_b_tree_insert"
+        }
     ]
 }
