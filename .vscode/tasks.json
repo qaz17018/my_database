@@ -1,0 +1,23 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build B-Tree Insert for Debugging",
+            "type": "shell",
+            "command": "make",
+            "args": [
+                "debug_test_b_tree_insert"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "silent"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ]
+        }
+    ]
+}

@@ -1,0 +1,28 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug B-Tree Insert",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/out/test_b_tree_insert",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            // "preLaunchTask" 会在启动调试前自动执行一个任务
+            // 我们让它自动执行 "make debug_test_b_tree_insert"
+            "preLaunchTask": "Build B-Tree Insert for Debugging"
+        }
+        // 你可以仿照上面的结构，为其他测试（如 test_leaf_split）添加更多的调试配置
+    ]
+}

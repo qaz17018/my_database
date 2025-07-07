@@ -6,6 +6,7 @@
         "buffer_pool.h": "c",
         "page.h": "c",
         "string.h": "c",
-        "row.h": "c"
+        "row.h": "c",
+        "b_tree.h": "c"
     }
 }
