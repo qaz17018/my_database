@@ -26,6 +26,5 @@ typedef struct
 
 uint32_t internal_page_get_child(InternalPage *page, uint32_t key);
 
-int internal_page_insert(InternalPage *page, uint32_t key, uint32_t child_page_no);
-
+int internal_page_insert(uint32_t space_id, uint32_t page_no, InternalPage *page, uint32_t key, uint32_t child_page_no);
 #endif
