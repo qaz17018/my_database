@@ -2,17 +2,21 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug C Program (Dynamic)",
+            "name": "Debug Active C Test File",
             "type": "cppdbg",
             "request": "launch",
-            // "program" 不再是硬编码，而是使用了输入变量 ${input:testName}
-            "program": "${workspaceFolder}/out/${input:testName}_debug",
+            "program": "${workspaceFolder}/out/${fileBasenameNoExtension}_debug",
             "args": [],
-            "stopAtEntry": false,
+            "stopAtEntry": true, // 我们依然在入口处暂停
             "cwd": "${workspaceFolder}",
             "environment": [],
             "externalConsole": false,
             "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb",
+            // [新增] 下面是专门为WSL准备的路径映射
+            "sourceFileMap": {
+                "/mnt/d": "d:\\" // 请根据你的实际情况修改
+            },
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",
@@ -20,18 +24,7 @@
                     "ignoreFailures": true
                 }
             ],
-            // preLaunchTask 现在指向我们新的通用任务
-            "preLaunchTask": "Make Debug Build"
-        }
-    ],
-    // "inputs" 是这次改造的核心！
-    "inputs": [
-        {
-            // 定义一个ID为 "testName" 的输入变量
-            "id": "testName",
-            "type": "promptString",
-            "description": "Enter the name of the test file to debug (e.g., test_b_tree_insert)",
-            "default": "test_b_tree_insert"
+            "preLaunchTask": "Build Active Test File for Debugging"
         }
     ]
 }

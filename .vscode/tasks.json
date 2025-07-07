@@ -2,11 +2,10 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Make Debug Build",
+            "label": "Build Active Test File for Debugging",
             "type": "shell",
-            // 命令现在非常通用，只调用 make debug
-            // 具体构建哪个文件，由 launch.json 传来的变量决定
-            "command": "make debug TEST=${input:testName}",
+            // [修改] 使用内置变量，自动构建当前打开的测试文件
+            "command": "make debug TEST=${fileBasenameNoExtension}",
             "group": {
                 "kind": "build",
                 "isDefault": true
