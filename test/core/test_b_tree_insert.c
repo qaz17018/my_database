@@ -26,7 +26,7 @@ int main()
     for (int i = 0; i < trigger_count; i++)
     {
         Row row = {.id = i + 1};
-        sprintf(row.name, "User%d", i + 1);
+        // sprintf(row.name, "User%d", i + 1);
         b_tree_insert(space_id, &row);
     }
 
