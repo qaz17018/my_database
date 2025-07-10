@@ -121,3 +121,59 @@ void *buf_alloc_page(uint32_t space_id, PageType type, uint32_t *out_page_no)
 
     return frame->data;
 }
+
+// [实现新接口] 返回 BufferFrame*
+BufferFrame *buf_get_frame(uint32_t space_id, uint32_t page_no)
+{
+    int idx = find_frame(space_id, page_no);
+    if (idx >= 0)
+    {
+        pool.frames[idx].last_access_time = time(NULL);
+        return &pool.frames[idx];
+    }
+
+    int new_idx = evict_frame();
+    PageHeader header;
+
+    if (read_page(space_id, page_no, pool.frames[new_idx].data, &header) != 0)
+    {
+        pool.frames[new_idx].is_used = 0;
+        return NULL;
+    }
+
+    pool.frames[new_idx].space_id = space_id;
+    pool.frames[new_idx].page_no = page_no;
+    pool.frames[new_idx].page_type = header.page_type;
+    pool.frames[new_idx].is_used = 1;
+    pool.frames[new_idx].is_dirty = 0;
+    pool.frames[new_idx].last_access_time = time(NULL);
+
+    return &pool.frames[new_idx];
+}
+
+// [实现新接口] 返回 BufferFrame*
+BufferFrame *buf_alloc_frame(uint32_t space_id, PageType type, uint32_t *out_page_no)
+{
+    static uint32_t next_free_page = 1;
+
+    uint32_t page_no = next_free_page++;
+    *out_page_no = page_no;
+
+    int idx = evict_frame();
+    if (idx < 0)
+        return NULL; // 无法分配
+
+    BufferFrame *frame = &pool.frames[idx];
+
+    memset(frame->data, 0, PAGE_DATA_SIZE);
+    frame->space_id = space_id;
+    frame->page_no = page_no;
+    frame->is_dirty = 1;
+    frame->is_used = 1;
+    frame->last_access_time = time(NULL);
+    frame->page_type = type;
+
+    write_page(space_id, page_no, type, frame->data);
+
+    return frame;
+}

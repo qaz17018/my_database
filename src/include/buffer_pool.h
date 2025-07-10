@@ -18,6 +18,11 @@ typedef struct
 } BufferFrame;
 
 void buf_init();
+
+// [接口升级] 不再返回void*，而是返回整个缓冲块的指针
+BufferFrame *buf_get_frame(uint32_t space_id, uint32_t page_no);
+BufferFrame *buf_alloc_frame(uint32_t space_id, PageType type, uint32_t *out_page_no);
+
 void *buf_get_page(uint32_t space_id, uint32_t page_no, PageType type);
 void buf_mark_dirty(uint32_t space_id, uint32_t page_no);
 void buf_flush_all();

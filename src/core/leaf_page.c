@@ -64,8 +64,10 @@ Row *leaf_page_search(LeafPage *page, uint32_t id)
 // [修改] 函数签名匹配头文件
 int leaf_page_insert_or_split(uint32_t space_id, uint32_t page_no, const Row *row, uint32_t *out_new_page_no, uint32_t *out_split_key)
 {
-    LeafPage *page = (LeafPage *)buf_get_page(space_id, page_no, PAGE_TYPE_LEAF);
-
+    BufferFrame *frame = buf_get_frame(space_id, page_no);
+    if (!frame)
+        return -1;
+    LeafPage *page = (LeafPage *)frame->data;
     // 如果当前页未满，直接插入
     if (page->num_records < MAX_LEAF_RECORDS)
     {
@@ -78,10 +80,16 @@ int leaf_page_insert_or_split(uint32_t space_id, uint32_t page_no, const Row *ro
 
     // 1. 分配一个新页
     uint32_t new_page_no;
-    LeafPage *new_page = (LeafPage *)buf_alloc_page(space_id, PAGE_TYPE_LEAF, &new_page_no);
-    if (!new_page)
+    BufferFrame *new_frame = buf_alloc_frame(space_id, PAGE_TYPE_LEAF, &new_page_no);
+    if (!new_frame)
         return -1; // 分配失败
     *out_new_page_no = new_page_no;
+    LeafPage *new_page = (LeafPage *)new_frame->data;
+
+    frame = buf_get_frame(space_id, page_no); // 重新获取，因为buf_alloc_frame可能导致其被淘汰
+    if (!frame)
+        return -1;
+    page = (LeafPage *)frame->data;
 
     // 2. 将原页的后半部分记录移动到新页
     int mid = MAX_LEAF_RECORDS / 2;
@@ -103,12 +111,12 @@ int leaf_page_insert_or_split(uint32_t space_id, uint32_t page_no, const Row *ro
     if (row->id < *out_split_key)
     {
         // 插入到原页
-        leaf_page_insert(space_id, page_no, page, row);
+        return leaf_page_insert(space_id, page_no, page, row);
     }
     else
     {
         // 插入到新页
-        leaf_page_insert(space_id, new_page_no, new_page, row);
+        return leaf_page_insert(space_id, new_page_no, new_page, row);
     }
 
     // [完成TODO-2] 分裂完成后，原页和新页都已被修改，都应被标记为脏页。
