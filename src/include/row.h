@@ -6,10 +6,14 @@
 #define MAX_NAME_LEN 32
 #define MAX_ROWS_PER_PAGE 256
 
+#define USERNAME_MAX_LEN 32
+#define EMAIL_MAX_LEN 255
+
 typedef struct
 {
     uint32_t id;
-    char name[MAX_NAME_LEN];
+    char username[USERNAME_MAX_LEN];
+    char email[EMAIL_MAX_LEN];
 } Row;
 
 typedef struct

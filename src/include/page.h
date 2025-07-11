@@ -9,9 +9,11 @@
 typedef enum
 {
     PAGE_TYPE_META = 0,
-    PAGE_TYPE_LEAF = 1,     // [修改] 为了更清晰，将DATA改为LEAF
-    PAGE_TYPE_INTERNAL = 2, // [新增] 内节点类型
-    PAGE_TYPE_FREE = 3
+    PAGE_TYPE_LEAF = 1,               // 主B+树的叶子
+    PAGE_TYPE_INTERNAL = 2,           // 主B+树的内节点
+    PAGE_TYPE_SECONDARY_LEAF = 3,     // [新增] 辅助B+树的叶子
+    PAGE_TYPE_SECONDARY_INTERNAL = 4, // [新增] 辅助B+树的内节点
+    PAGE_TYPE_FREE = 5
 } PageType;
 
 typedef struct

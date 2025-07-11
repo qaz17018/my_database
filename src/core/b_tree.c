@@ -2,6 +2,7 @@
 #include "buffer_pool.h"
 #include "leaf_page.h"
 #include "internal_page.h"
+#include "secondary_index_page.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -10,6 +11,8 @@ static BTreeMeta *get_meta(uint32_t space_id)
     BufferFrame *frame = buf_get_frame(space_id, 0);
     return frame ? (BTreeMeta *)frame->data : NULL;
 }
+
+int secondary_b_tree_insert(uint32_t space_id, const SecondaryLeafEntry *entry);
 
 int b_tree_create(uint32_t space_id)
 {
@@ -151,4 +154,9 @@ int b_tree_insert(uint32_t space_id, const Row *row)
         printf("New root is an INTERNAL page: %u. Tree height increased.\n", new_root_page_no);
     }
     return 0;
+}
+
+// [核心实现] 表级别地插入函数
+int table_insert_row(uint32_t space_id, const Row *row) {
+    
 }
