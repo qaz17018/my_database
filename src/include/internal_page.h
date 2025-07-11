@@ -27,4 +27,17 @@ typedef struct
 uint32_t internal_page_get_child(InternalPage *page, uint32_t key);
 
 int internal_page_insert(uint32_t space_id, uint32_t page_no, InternalPage *page, uint32_t key, uint32_t child_page_no);
+
+/**
+ * @brief 向内节点插入条目，如果页满则进行分裂
+ * * @param space_id 空间ID
+ * @param page_no 当前内节点的页号
+ * @param key 要插入的键
+ * @param child_page_no 要插入的键所指向的子节点页号
+ * @param out_split_key 如果发生分裂，这里会传出被推向上一层的新分裂键
+ * @param out_new_page_no 如果发生分裂，这里会传出新分裂出的内节点的页号
+ * @return int 0表示成功
+ */
+int internal_page_insert_or_split(uint32_t space_id, uint32_t page_no, uint32_t key, uint32_t child_page_no, uint32_t *out_split_key, uint32_t *out_new_page_no);
+
 #endif

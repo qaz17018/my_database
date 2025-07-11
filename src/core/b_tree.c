@@ -76,7 +76,14 @@ static int b_tree_insert_internal(uint32_t space_id, uint32_t page_no, const Row
         *out_new_page_no = 0;
 
         // 检查当前内节点是否已满
-        if (internal->num_entries < MAX_INTERNAL_ENTRIES)
+        frame = buf_get_frame(space_id, page_no);
+        if (!frame)
+            return -1;
+
+        // [核心修改] 调用我们新的分裂函数
+        // 它会自动处理插入或分裂，并将需要推向上一层的键通过 out_split_key 返回
+        return internal_page_insert_or_split(space_id, page_no, new_key, new_child_page, out_split_key, out_new_page_no);
+        /* if (internal->num_entries < MAX_INTERNAL_ENTRIES)
         {
             return internal_page_insert(space_id, page_no, internal, new_key, new_child_page);
         }
@@ -85,7 +92,7 @@ static int b_tree_insert_internal(uint32_t space_id, uint32_t page_no, const Row
             // [TODO] 内节点也满了，需要分裂内节点
             printf("PANIC: Internal page %u is full, needs splitting! (Not implemented yet)\n", page_no);
             return -1;
-        }
+        } */
     }
 
     fprintf(stderr, "Error: Unknown page type %d for page %u\n", frame->page_type, page_no);
@@ -121,6 +128,16 @@ int b_tree_insert(uint32_t space_id, const Row *row)
         if (!new_root_frame)
             return -1;
         InternalPage *new_root = (InternalPage *)new_root_frame->data;
+
+        // [核心修复-3] 在成功分配新根页后，更新元数据
+        BufferFrame *meta_frame_for_update = buf_get_frame(space_id, 0);
+        if (meta_frame_for_update)
+        {
+            BTreeMeta *meta_for_update = (BTreeMeta *)meta_frame_for_update->data;
+            meta_for_update->total_pages++;
+            // root_page_no 的更新会在下面完成，这里先标记脏
+            buf_mark_dirty(space_id, 0);
+        }
 
         // 新根节点指向原来的老根（现在是左孩子）和分裂出的新页（右孩子）
         new_root->first_child_page_no = root_page_no;

@@ -1,4 +1,5 @@
 #include "leaf_page.h"
+#include "b_tree.h"
 #include "buffer_pool.h"
 #include <string.h>
 #include <stdio.h>
@@ -85,6 +86,15 @@ int leaf_page_insert_or_split(uint32_t space_id, uint32_t page_no, const Row *ro
         return -1; // 分配失败
     *out_new_page_no = new_page_no;
     LeafPage *new_page = (LeafPage *)new_frame->data;
+
+    // [核心修复-1] 在成功分配新页后，更新元数据
+    BufferFrame *meta_frame = buf_get_frame(space_id, 0);
+    if (meta_frame)
+    {
+        BTreeMeta *meta = (BTreeMeta *)meta_frame->data;
+        meta->total_pages++;
+        buf_mark_dirty(space_id, 0);
+    }
 
     frame = buf_get_frame(space_id, page_no); // 重新获取，因为buf_alloc_frame可能导致其被淘汰
     if (!frame)
