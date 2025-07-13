@@ -126,3 +126,43 @@ static int secondary_b_tree_insert_internal(uint32_t space_id, uint32_t page_no,
 
     return -1; // 未知页面类型
 }
+
+// 声明一个内部递归函数
+static uint32_t secondary_b_tree_search_internal(uint32_t space_id, uint32_t page_no, const char *key);
+
+// 顶层的辅助索引查找函数
+uint32_t secondary_b_tree_search(uint32_t space_id, const char *key)
+{
+    BufferFrame *meta_frame = buf_get_frame(space_id, 0);
+    if (!meta_frame)
+        return 0; // 0 代表未找到
+    BTreeMeta *meta = (BTreeMeta *)meta_frame->data;
+
+    if (meta->username_idx_root_page_no == 0)
+    {
+        return 0; // 辅助索引树不存在
+    }
+
+    return secondary_b_tree_search_internal(space_id, meta->username_idx_root_page_no, key);
+}
+
+// 内部递归查找函数
+static uint32_t secondary_b_tree_search_internal(uint32_t space_id, uint32_t page_no, const char *key)
+{
+    BufferFrame *frame = buf_get_frame(space_id, page_no);
+    if (!frame)
+        return 0;
+
+    if (frame->page_type == PAGE_TYPE_SECONDARY_LEAF)
+    {
+        return secondary_leaf_page_search((SecondaryLeafPage *)frame->data, key);
+    }
+
+    if (frame->page_type == PAGE_TYPE_SECONDARY_INTERNAL)
+    {
+        uint32_t child_page_no = secondary_internal_page_get_child((SecondaryInternalPage *)frame->data, key);
+        return secondary_b_tree_search_internal(space_id, child_page_no, key);
+    }
+
+    return 0; // 未知页面类型或未找到
+}

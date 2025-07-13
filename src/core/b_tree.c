@@ -119,7 +119,12 @@ int b_tree_insert(uint32_t space_id, const Row *row)
     uint32_t split_key = 0;
     uint32_t new_page_no = 0;
 
-    b_tree_insert_internal(space_id, root_page_no, row, &split_key, &new_page_no);
+    // [核心修复] 我们现在检查下属的返回值
+    if (b_tree_insert_internal(space_id, root_page_no, row, &split_key, &new_page_no) != 0)
+    {
+        fprintf(stderr, "Error propagation: b_tree_insert_internal failed.\n");
+        return -1; // 如果下属失败了，经理也报告失败
+    }
 
     // 检查根节点是否发生了分裂
     if (split_key > 0)
@@ -157,6 +162,82 @@ int b_tree_insert(uint32_t space_id, const Row *row)
 }
 
 // [核心实现] 表级别地插入函数
-int table_insert_row(uint32_t space_id, const Row *row) {
-    
+int table_insert_row(uint32_t space_id, const Row *row)
+{
+    // 1. 首先，将完整数据行插入到主B+树（聚簇索引）中
+    if (b_tree_insert(space_id, row) != 0)
+    {
+        fprintf(stderr, "Error: Failed to insert into primary B-Tree.\n");
+        return -1; // 如果主索引插入失败，直接返回
+    }
+
+    // 2. 主B+树插入成功后，再构造辅助索引的条目
+    SecondaryLeafEntry secondary_entry;
+    strncpy(secondary_entry.key, row->username, USERNAME_MAX_LEN);
+    secondary_entry.primary_key = row->id;
+
+    // 3. 将辅助索引条目插入到辅助B+树中
+    if (secondary_b_tree_insert(space_id, &secondary_entry) != 0)
+    {
+        fprintf(stderr, "Error: Failed to insert into secondary index for username %s.\n", row->username);
+        // 在真实的数据库中，这里需要回滚第一步的操作，以保证数据一致性
+        return -1;
+    }
+
+    printf("Successfully inserted row (id=%u, username=%s) into both primary and secondary indexes.\n", row->id, row->username);
+    return 0;
+}
+
+static Row *b_tree_search_internal(uint32_t space_id, uint32_t page_no, uint32_t id);
+
+// 顶层的主B+树查找函数
+Row *b_tree_search(uint32_t space_id, uint32_t id)
+{
+    BTreeMeta *meta = get_meta(space_id);
+    if (!meta)
+        return NULL;
+
+    return b_tree_search_internal(space_id, meta->root_page_no, id);
+}
+
+// 内部递归查找函数
+static Row *b_tree_search_internal(uint32_t space_id, uint32_t page_no, uint32_t id)
+{
+    BufferFrame *frame = buf_get_frame(space_id, page_no);
+    if (!frame)
+        return NULL;
+
+    if (frame->page_type == PAGE_TYPE_LEAF)
+    {
+        // 在叶子节点中查找
+        // leaf_page.c 中还没有一个顶层的查找函数，我们先直接在这里实现
+        LeafPage *leaf = (LeafPage *)frame->data;
+        for (int i = 0; i < leaf->num_records; i++)
+        {
+            if (leaf->records[i].id == id)
+            {
+                // 注意：这里返回的指针指向Buffer Pool，是临时的
+                // 安全的做法是拷贝一份数据出来
+                static Row found_row;
+                found_row = leaf->records[i];
+                return &found_row;
+            }
+        }
+        BufferFrame *frame1 = buf_get_frame(space_id, page_no);
+        return NULL;
+    }
+
+    if (frame->page_type == PAGE_TYPE_INTERNAL)
+    {
+        uint32_t child_page_no = internal_page_get_child((InternalPage *)frame->data, id);
+        return b_tree_search_internal(space_id, child_page_no, id);
+    }
+
+    return NULL;
+}
+
+// 最后，实现我们之前在头文件中定义的 table_search 函数
+uint32_t table_search_pk_by_username(uint32_t space_id, const char *username)
+{
+    return secondary_b_tree_search(space_id, username);
 }

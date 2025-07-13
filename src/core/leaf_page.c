@@ -45,10 +45,16 @@ Row *leaf_page_search(LeafPage *page, uint32_t id)
     int left = 0, right = page->num_records - 1;
     while (left <= right)
     {
-        int mid = (left + right) / 2;
+        int mid = left + (right - left) / 2;
         if (page->records[mid].id == id)
         {
-            return &page->records[mid];
+            // [核心修复] 不要返回直接指向缓冲池的指针！
+            // 我们在函数内部创建一个静态变量，它是一块安全、持久的内存。
+            static Row result_copy;
+            // 将找到的数据，从不稳定的缓冲池内存，拷贝到这块安全的内存中。
+            result_copy = page->records[mid];
+            // 返回这块安全内存的地址。
+            return &result_copy;
         }
         else if (page->records[mid].id < id)
         {
@@ -59,6 +65,7 @@ Row *leaf_page_search(LeafPage *page, uint32_t id)
             right = mid - 1;
         }
     }
+    // 如果没有找到，返回NULL
     return NULL;
 }
 

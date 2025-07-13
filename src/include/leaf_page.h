@@ -3,8 +3,10 @@
 
 #include <stdint.h>
 #include "row.h"
+#include "page.h" // [新增] 需要引入page.h来获取PAGE_DATA_SIZE
 
-#define MAX_LEAF_RECORDS 256
+// [核心修复] 动态计算一页最多能容纳的行数
+#define MAX_LEAF_RECORDS ((PAGE_DATA_SIZE - sizeof(uint32_t) - sizeof(uint16_t)) / sizeof(Row))
 
 typedef struct
 {
