@@ -14,9 +14,6 @@
             "MIMode": "gdb",
             "miDebuggerPath": "/usr/bin/gdb",
             // [新增] 下面是专门为WSL准备的路径映射
-            "sourceFileMap": {
-                "/mnt/d": "d:\\" // 请根据你的实际情况修改
-            },
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",
