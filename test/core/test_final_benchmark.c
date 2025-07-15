@@ -59,7 +59,7 @@ int main()
     // ======================================================================
     printf("--- Phase 3: Query Performance Test ---\n");
 
-    const int num_queries = 1000; // 我们将执行1万次随机查询
+    const int num_queries = 5000; // 我们将执行1万次随机查询
     printf("Preparing to perform %d random primary key lookups...\n", num_queries);
 
     // 在查询前，清空一次缓存池，模拟从磁盘查询的“冷启动”场景
@@ -71,7 +71,7 @@ int main()
     {
 
         // 生成一个在1到500万之间的随机ID
-        uint32_t random_id = (rand() % num_insertions) + 1;
+        uint32_t random_id = 1 + i;
 
         printf("第%d次循环开始，id=%u\n", i, random_id);
 

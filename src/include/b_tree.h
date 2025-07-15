@@ -17,6 +17,8 @@ uint32_t table_search_pk_by_username(uint32_t space_id, const char *username);
 int b_tree_create(uint32_t space_id);
 int b_tree_insert(uint32_t space_id, const Row *row);
 
+Row *b_tree_search(uint32_t space_id, uint32_t id);
+
 // int b_tree_insert(uint32_t space_id, uint32_t root_page_no, const Row *row);
 
 #endif
