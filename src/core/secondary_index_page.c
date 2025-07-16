@@ -45,6 +45,8 @@ int secondary_leaf_page_insert(uint32_t space_id, uint32_t page_no, SecondaryLea
     page->entries[pos] = *entry;
     page->num_entries++;
     buf_mark_dirty(space_id, page_no);
+
+    return 0;
 }
 
 // 在辅助索引的叶子页中查找一个键

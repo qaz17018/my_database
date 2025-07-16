@@ -32,9 +32,13 @@ int main()
         { // 每插入50万条记录，打印一次进度
             printf("... %d records inserted.\n", i + 1);
         }
-        if (row.id == 57)
+        if (row.id == 179)
         {
-            printf("debugger point");
+            printf("stop here");
+        }
+        if (row.id == 3473)
+        {
+            printf("stop here");
         }
         if (b_tree_insert(space_id, &row) != 0)
         {
@@ -93,3 +97,5 @@ int main()
 
     return 0;
 }
+
+// id=1765    id=3473

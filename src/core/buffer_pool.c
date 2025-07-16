@@ -1,25 +1,85 @@
 #include "buffer_pool.h"
+#include "hash_table.h"
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
 
+// --- 高性能LRU缓存结构 ---
+
 static struct
 {
     BufferFrame frames[MAX_BUFFER_POOL_PAGES];
-} pool;
+    HashTable *hash_map;
+    BufferFrame *lru_head;
+    BufferFrame *lru_tail;
+} g_buffer_pool;
 
+// 组合 space_id 和 page_no 成为一个唯一的32位键
+// 这里我们假设 space_id 不会太大
+static uint32_t combine_key(uint32_t space_id, uint32_t page_no)
+{
+    return (space_id << 24) | page_no;
+}
+
+// 将一个节点从链表中“摘下”
+static void lru_detach_node(BufferFrame *frame)
+{
+    if (frame->prev)
+    {
+        frame->prev->next = frame->next;
+    }
+    if (frame->next)
+    {
+        frame->next->prev = frame->prev;
+    }
+    if (g_buffer_pool.lru_head == frame)
+    {
+        g_buffer_pool.lru_head = frame->next;
+    }
+    if (g_buffer_pool.lru_tail == frame)
+    {
+        g_buffer_pool.lru_tail = frame->prev;
+    }
+    frame->prev = NULL;
+    frame->next = NULL;
+}
+
+// 将一个节点移动到链表头部（标记为最新）
+static void lru_attach_to_head(BufferFrame *frame)
+{
+    frame->next = g_buffer_pool.lru_head;
+    if (g_buffer_pool.lru_head)
+    {
+        g_buffer_pool.lru_head->prev = frame;
+    }
+    g_buffer_pool.lru_head = frame;
+    if (g_buffer_pool.lru_tail == NULL)
+    {
+        g_buffer_pool.lru_tail = frame;
+    }
+    frame->prev = NULL;
+}
+
+// --- 缓冲池主逻辑重构
 void buf_init()
 {
-    memset(&pool, 0, sizeof(pool));
+    memset(g_buffer_pool.frames, 0, sizeof(g_buffer_pool.frames));
+    if (g_buffer_pool.hash_map)
+    {
+        hash_table_destroy(g_buffer_pool.hash_map);
+    }
+    g_buffer_pool.hash_map = hash_table_create(MAX_BUFFER_POOL_PAGES * 2);
+    g_buffer_pool.lru_head = NULL;
+    g_buffer_pool.lru_tail = NULL;
 }
 
 static int find_frame(uint32_t space_id, uint32_t page_no)
 {
     for (int i = 0; i < MAX_BUFFER_POOL_PAGES; i++)
     {
-        if (pool.frames[i].is_used &&
-            pool.frames[i].space_id == space_id &&
-            pool.frames[i].page_no == page_no)
+        if (g_buffer_pool.frames[i].is_used &&
+            g_buffer_pool.frames[i].space_id == space_id &&
+            g_buffer_pool.frames[i].page_no == page_no)
         {
             return i;
         }
@@ -27,59 +87,37 @@ static int find_frame(uint32_t space_id, uint32_t page_no)
     return -1;
 }
 
-static int evict_frame()
+static BufferFrame *evict_frame()
 {
-    int oldest = -1;
-    uint64_t oldest_time = (uint64_t)-1;
-    for (int i = 0; i < MAX_BUFFER_POOL_PAGES; i++)
+    BufferFrame *victim = g_buffer_pool.lru_tail;
+    if (!victim)
     {
-        if (!pool.frames[i].is_used)
-            return i;
-        if (pool.frames[i].last_access_time < oldest_time)
+        for (int i = 0; i < MAX_BUFFER_POOL_PAGES; ++i)
         {
-            oldest_time = pool.frames[i].last_access_time;
-            oldest = i;
+            if (!g_buffer_pool.frames[i].is_used)
+                return &g_buffer_pool.frames[i];
         }
+        return NULL;
     }
-    if (pool.frames[oldest].is_dirty)
+
+    hash_table_remove(g_buffer_pool.hash_map, combine_key(victim->space_id, victim->page_no));
+
+    lru_detach_node(victim);
+
+    if (victim->is_dirty)
     {
-        write_page(pool.frames[oldest].space_id,
-                   pool.frames[oldest].page_no,
-                   pool.frames[oldest].page_type,
-                   pool.frames[oldest].data);
+        write_page(victim->space_id, victim->page_no, victim->page_type, victim->data);
     }
-    return oldest;
-}
-
-void *buf_get_page(uint32_t space_id, uint32_t page_no, PageType type)
-{
-    int idx = find_frame(space_id, page_no);
-    if (idx >= 0)
-    {
-        pool.frames[idx].last_access_time = time(NULL);
-        return pool.frames[idx].data;
-    }
-
-    int new_idx = evict_frame();
-    PageHeader header;
-    read_page(space_id, page_no, pool.frames[new_idx].data, &header);
-
-    pool.frames[new_idx].space_id = space_id;
-    pool.frames[new_idx].page_no = page_no;
-    pool.frames[new_idx].page_type = header.page_type;
-    pool.frames[new_idx].is_used = 1;
-    pool.frames[new_idx].is_dirty = 0;
-    pool.frames[new_idx].last_access_time = time(NULL);
-
-    return pool.frames[new_idx].data;
+    victim->is_used = 0;
+    return victim;
 }
 
 void buf_mark_dirty(uint32_t space_id, uint32_t page_no)
 {
-    int idx = find_frame(space_id, page_no);
+    int idx = hash_table_get(g_buffer_pool.hash_map, combine_key(space_id, page_no));
     if (idx >= 0)
     {
-        pool.frames[idx].is_dirty = 1;
+        g_buffer_pool.frames[idx].is_dirty = 1;
     }
 }
 
@@ -87,93 +125,106 @@ void buf_flush_all()
 {
     for (int i = 0; i < MAX_BUFFER_POOL_PAGES; i++)
     {
-        if (pool.frames[i].is_used && pool.frames[i].is_dirty)
+        if (g_buffer_pool.frames[i].is_used && g_buffer_pool.frames[i].is_dirty)
         {
-            write_page(pool.frames[i].space_id,
-                       pool.frames[i].page_no,
-                       pool.frames[i].page_type,
-                       pool.frames[i].data);
-            pool.frames[i].is_dirty = 0;
+            write_page(g_buffer_pool.frames[i].space_id,
+                       g_buffer_pool.frames[i].page_no,
+                       g_buffer_pool.frames[i].page_type,
+                       g_buffer_pool.frames[i].data);
+            g_buffer_pool.frames[i].is_dirty = 0;
         }
     }
 }
 
-void *buf_alloc_page(uint32_t space_id, PageType type, uint32_t *out_page_no)
-{
-    static uint32_t next_free_page = 1;
-
-    uint32_t page_no = next_free_page++;
-    *out_page_no = page_no;
-
-    int idx = evict_frame();
-
-    BufferFrame *frame = &pool.frames[idx];
-
-    memset(frame->data, 0, PAGE_DATA_SIZE);
-
-    frame->page_no = page_no;
-    frame->space_id = space_id;
-    frame->is_dirty = 1;
-    frame->last_access_time = time(NULL);
-    frame->is_used = 1;
-
-    write_page(space_id, page_no, type, frame->data);
-
-    return frame->data;
-}
-
 // [实现新接口] 返回 BufferFrame*
+// 获取页面操作
 BufferFrame *buf_get_frame(uint32_t space_id, uint32_t page_no)
 {
-    int idx = find_frame(space_id, page_no);
+    // O(1) 查找
+    int idx = hash_table_get(g_buffer_pool.hash_map, combine_key(space_id, page_no));
     if (idx >= 0)
     {
-        pool.frames[idx].last_access_time = time(NULL);
-        return &pool.frames[idx];
+        BufferFrame *frame = &g_buffer_pool.frames[idx];
+        // 移动到链表头部
+        lru_detach_node(frame);
+        lru_attach_to_head(frame);
+        return frame;
     }
 
-    int new_idx = evict_frame();
-    PageHeader header;
+    // --- 未命中，需要从磁盘加载 ---
 
-    if (read_page(space_id, page_no, pool.frames[new_idx].data, &header) != 0)
+    // 找一个空闲或被淘汰的缓冲块
+    BufferFrame *new_frame = NULL;
+    for (int i = 0; i < MAX_BUFFER_POOL_PAGES; ++i)
     {
-        pool.frames[new_idx].is_used = 0;
-        return NULL;
+        if (!g_buffer_pool.frames[i].is_used)
+        {
+            new_frame = &g_buffer_pool.frames[i];
+            break;
+        }
+    }
+    if (!new_frame)
+    { // 如果没有空闲的，就淘汰一个
+        new_frame = evict_frame();
     }
 
-    pool.frames[new_idx].space_id = space_id;
-    pool.frames[new_idx].page_no = page_no;
-    pool.frames[new_idx].page_type = header.page_type;
-    pool.frames[new_idx].is_used = 1;
-    pool.frames[new_idx].is_dirty = 0;
-    pool.frames[new_idx].last_access_time = time(NULL);
+    PageHeader header;
+    if (read_page(space_id, page_no, new_frame->data, &header) != 0)
+    {
+        return NULL; // 读取失败
+    }
 
-    return &pool.frames[new_idx];
+    // 配置新加载的缓冲块
+    new_frame->space_id = space_id;
+    new_frame->page_no = page_no;
+    new_frame->page_type = header.page_type;
+    new_frame->is_used = 1;
+    new_frame->is_dirty = 0;
+
+    // 放入哈希表和链表头部
+    int frame_idx = new_frame - g_buffer_pool.frames;
+    hash_table_put(g_buffer_pool.hash_map, combine_key(space_id, page_no), frame_idx);
+    lru_attach_to_head(new_frame);
+
+    return new_frame;
 }
 
 // [实现新接口] 返回 BufferFrame*
+// 分配新页操作
 BufferFrame *buf_alloc_frame(uint32_t space_id, PageType type, uint32_t *out_page_no)
 {
-    static uint32_t next_free_page = 1;
-
+    static uint32_t next_free_page = 0;
     uint32_t page_no = next_free_page++;
     *out_page_no = page_no;
 
-    int idx = evict_frame();
-    if (idx < 0)
-        return NULL; // 无法分配
+    // 找一个空闲或被淘汰的缓冲块
+    BufferFrame *new_frame = NULL;
+    for (int i = 0; i < MAX_BUFFER_POOL_PAGES; ++i)
+    {
+        if (!g_buffer_pool.frames[i].is_used)
+        {
+            new_frame = &g_buffer_pool.frames[i];
+            break;
+        }
+    }
+    if (!new_frame)
+    {
+        new_frame = evict_frame();
+    }
 
-    BufferFrame *frame = &pool.frames[idx];
+    memset(new_frame->data, 0, PAGE_DATA_SIZE);
+    new_frame->space_id = space_id;
+    new_frame->page_no = page_no;
+    new_frame->is_dirty = 1;
+    new_frame->is_used = 1;
+    new_frame->page_type = type;
 
-    memset(frame->data, 0, PAGE_DATA_SIZE);
-    frame->space_id = space_id;
-    frame->page_no = page_no;
-    frame->is_dirty = 1;
-    frame->is_used = 1;
-    frame->last_access_time = time(NULL);
-    frame->page_type = type;
+    // 放入哈希表和链表头部
+    int frame_idx = new_frame - g_buffer_pool.frames;
+    hash_table_put(g_buffer_pool.hash_map, combine_key(space_id, page_no), frame_idx);
+    lru_attach_to_head(new_frame);
 
-    write_page(space_id, page_no, type, frame->data);
+    write_page(space_id, page_no, type, new_frame->data);
 
-    return frame;
+    return new_frame;
 }
