@@ -14,25 +14,42 @@ static BTreeMeta *get_meta(uint32_t space_id)
 
 int secondary_b_tree_insert(uint32_t space_id, const SecondaryLeafEntry *entry);
 
+// [最终修复] 这是B+树创世的终极、完整、且逻辑正确的实现
 int b_tree_create(uint32_t space_id)
 {
-    // 1. 分配一个页作为B+树的第一个节点（它既是根，也是叶子）
+    // --- 步骤1: 创世之初，先创建户籍管理员（元数据页） ---
+    // 我们分配的第一个页，必须是0号页，专门用于存储元数据。
+    uint32_t meta_page_no;
+    BufferFrame *meta_frame = buf_alloc_frame(space_id, PAGE_TYPE_META, &meta_page_no);
+    // 做一个严格的断言，确保创世的第一个页就是0号页
+    if (!meta_frame || meta_page_no != 0)
+    {
+        fprintf(stderr, "Fatal Error: The first page allocated was not page 0. Creation failed.\n");
+        return -1;
+    }
+    BTreeMeta *meta = (BTreeMeta *)meta_frame->data;
+
+    // --- 步骤2: 有了管理员，再创建第一个居民（根节点） ---
+    // 我们分配的第二个页，将是1号页，它将作为B+树的第一个根，其类型为叶子。
     uint32_t root_page_no;
     BufferFrame *root_frame = buf_alloc_frame(space_id, PAGE_TYPE_LEAF, &root_page_no);
-    if (!root_frame)
+    if (!root_frame || root_page_no != 1)
+    {
+        fprintf(stderr, "Fatal Error: The second page allocated was not page 1. Creation failed.\n");
         return -1;
+    }
 
-    // 2. 获取元数据页（此时文件已创建，可以安全获取）
-    BTreeMeta *meta = get_meta(space_id);
-    if (!meta)
-        return -1;
-
-    // 3. 更新元数据，指向新的根节点
+    // --- 步骤3: 管理员记录下第一个居民的住址 ---
+    // 初始化元数据，让它指向我们刚刚创建的根节点
     meta->root_page_no = root_page_no;
-    meta->total_pages = 2; // meta page + root page
+    meta->total_pages = 2; // 现在我们有了0号（meta）和1号（root）两个页
 
-    buf_mark_dirty(space_id, 0); // 标记元数据页为脏
-    printf("B+Tree created for space %u. Root is a LEAF page: %u\n", space_id, root_page_no);
+    // 4. 将元数据的修改登记在案（标记为脏页），以便写回磁盘
+    buf_mark_dirty(space_id, meta_page_no);
+
+    printf("B+Tree created for space %u. Meta Page: %u, Root Page (Leaf): %u\n",
+           space_id, meta_page_no, root_page_no);
+
     return 0;
 }
 
