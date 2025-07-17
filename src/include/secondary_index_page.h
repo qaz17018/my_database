@@ -45,4 +45,10 @@ typedef struct
     SecondaryInternalEntry entries[MAX_SECONDARY_INTERNAL_ENTRIES];
 } SecondaryInternalPage;
 
+int secondary_leaf_page_insert(uint32_t space_id, uint32_t page_no, SecondaryLeafPage *page, const SecondaryLeafEntry *entry);
+
+uint32_t secondary_leaf_page_search(SecondaryLeafPage *page, const char *key);
+
+uint32_t secondary_internal_page_get_child(SecondaryInternalPage *page, const char *key);
+
 #endif
