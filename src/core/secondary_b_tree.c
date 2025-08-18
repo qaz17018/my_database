@@ -119,9 +119,9 @@ static int secondary_leaf_page_insert_or_split(uint32_t space_id, uint32_t page_
 
     page->next_leaf = new_page_no;
 
-    *out_split_key = new_page->entries[0].key;
+    strcpy(out_split_key, new_page->entries[0].key);
 
-    if (strcpy(entry->key, out_split_key) > 0)
+    if (strcmp(entry->key, out_split_key) < 0)
     {
         return secondary_leaf_page_insert(space_id, page_no, page, entry);
     }
