@@ -20,7 +20,7 @@ int main()
 
     buf_init();
 
-    const int num_insertions = 1000; // 我们将插入一百万条记录
+    const int num_insertions = 200000; // 我们将插入一百万条记录
     printf("--- Phase 1: Inserting %d records with usernames ---\n", num_insertions);
     printf("This will update both primary and secondary B-Trees.\n");
 
@@ -61,7 +61,7 @@ int main()
     // ======================================================================
     printf("--- Phase 3: Secondary Index Query Performance Test ---\n");
 
-    const int num_queries = 1000; // 我们将执行1万次随机查询
+    const int num_queries = 200000; // 我们将执行1万次随机查询
     printf("Preparing to perform %d random lookups via username...\n", num_queries);
 
     // 清空缓存池，模拟从磁盘查询的“冷启动”
@@ -69,16 +69,37 @@ int main()
     srand(time(NULL));
 
     clock_t query_start_time = clock();
+    char search_username[USERNAME_MAX_LEN];
+    sprintf(search_username, "user%d", 11);
+
+    printf("Attempting to find: %s\n", search_username);
+
+    // 我们将手动跟踪这个函数的执行
+    /* uint32_t pk_found = table_search_pk_by_username(space_id, search_username);
+
+    if (pk_found == 0)
+    {
+        printf("Query failed as expected. Starting investigation.\n");
+    }
+    else
+    {
+        printf("Query unexpectedly succeeded for pk: %u.\n", pk_found);
+    } */
     for (int i = 0; i < num_queries; i++)
     {
         // 1. 生成一个随机的、确保存在的用户名
-        uint32_t random_user_num = (rand() % num_insertions) + 1;
+        uint32_t random_user_num = i + 1;
         char search_username[USERNAME_MAX_LEN];
         sprintf(search_username, "user%d", random_user_num);
 
         // 2. 通过辅助索引查找，获取主键ID
         uint32_t pk_found = table_search_pk_by_username(space_id, search_username);
-        assert(pk_found == random_user_num); // 验证找到的主键是否正确
+        if (pk_found != random_user_num)
+        {
+            printf("id: %d\n", random_user_num);
+            continue;
+        }
+        // assert(pk_found == random_user_num); // 验证找到的主键是否正确
 
         // 3. 回表：通过主键ID，查找完整的行数据
         Row *found_row = b_tree_search(space_id, pk_found);

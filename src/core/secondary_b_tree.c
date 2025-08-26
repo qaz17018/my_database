@@ -195,16 +195,40 @@ static int secondary_b_tree_insert_internal(uint32_t space_id, uint32_t page_no,
         return secondary_leaf_page_insert_or_split(space_id, page_no, entry, out_split_key, out_new_page_no);
     }
 
+    // Case 2: 如果是内节点
     if (frame->page_type == PAGE_TYPE_SECONDARY_INTERNAL)
     {
         SecondaryInternalPage *page = (SecondaryInternalPage *)frame->data;
         uint32_t child_page_no = secondary_internal_page_get_child(page, entry->key);
-        secondary_b_tree_insert_internal(space_id, child_page_no, entry, out_split_key, out_new_page_no);
 
-        if (out_split_key[0] != '\0')
+        // [核心修复] 使用临时的局部变量来接收下层递归调用的分裂结果
+        char child_split_key[USERNAME_MAX_LEN] = {0};
+        uint32_t child_new_page_no = 0;
+
+        // 让下层递归把结果写入这些安全的临时变量
+        if (secondary_b_tree_insert_internal(space_id, child_page_no, entry, child_split_key, &child_new_page_no) != 0)
         {
-            return secondary_internal_page_insert_or_split(space_id, page_no, out_split_key, *out_new_page_no, out_split_key, out_new_page_no);
+            return -1;
         }
+
+        // 检查下层是否真的发生了分裂
+        if (child_split_key[0] != '\0')
+        {
+            // 如果下层分裂了，我们现在用这些安全、干净的临时变量作为输入，
+            // 去调用当前节点的插入/分裂函数。
+            // 并且，把我们自己的输出参数 out_split_key 和 out_new_page_no 传递给它，
+            // 以便它能向上层报告自己的分裂情况。
+            return secondary_internal_page_insert_or_split(
+                space_id,
+                page_no,
+                child_split_key,   // <-- 使用安全的临时变量作为输入
+                child_new_page_no, // <-- 使用安全的临时变量作为输入
+                out_split_key,     // <-- 传递自己的输出参数
+                out_new_page_no    // <-- 传递自己的输出参数
+            );
+        }
+
+        // 如果下层没有分裂，万事大吉
         return 0;
     }
 
