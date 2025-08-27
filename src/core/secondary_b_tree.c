@@ -10,7 +10,7 @@ static int secondary_b_tree_insert_internal(uint32_t space_id, uint32_t page_no,
 
 // (这个文件的其余函数是为了辅助索引服务的，逻辑与b_tree.c类似，但使用字符串比较)
 
-// 内部函数：向辅助索引内节点插入或分裂
+// [最终修复] 这是辅助索引内节点分裂的终极、完整、且逻辑正确的实现
 static int secondary_internal_page_insert_or_split(uint32_t space_id, uint32_t page_no, const char *key, uint32_t child_page_no,
                                                    char *out_split_key, uint32_t *out_new_page_no)
 {
@@ -19,18 +19,14 @@ static int secondary_internal_page_insert_or_split(uint32_t space_id, uint32_t p
         return -1;
     SecondaryInternalPage *page = (SecondaryInternalPage *)frame->data;
 
-    // 如果未满，直接插入
+    // 如果未满，直接插入 (这部分逻辑是正确的)
     if (page->num_entries < MAX_SECONDARY_INTERNAL_ENTRIES)
     {
         int pos = 0;
         while (pos < page->num_entries && strcmp(page->entries[pos].key, key) < 0)
-        {
             pos++;
-        }
         for (int i = page->num_entries; i > pos; i--)
-        {
             page->entries[i] = page->entries[i - 1];
-        }
         strcpy(page->entries[pos].key, key);
         page->entries[pos].child_page_no = child_page_no;
         page->num_entries++;
@@ -38,38 +34,65 @@ static int secondary_internal_page_insert_or_split(uint32_t space_id, uint32_t p
         return 0;
     }
 
-    // --- 内节点分裂 ---
-    SecondaryInternalEntry temp_entries[MAX_SECONDARY_INTERNAL_ENTRIES + 1];
+    // --- 内节点分裂的正确实现 ---
+
+    // 1. 创建临时的、能容纳所有指针和键的序列
+    char all_keys[MAX_SECONDARY_INTERNAL_ENTRIES + 1][USERNAME_MAX_LEN];
+    uint32_t all_children[MAX_SECONDARY_INTERNAL_ENTRIES + 2];
+
+    // 拷贝旧页的所有指针和键，确保包含 first_child_page_no
+    all_children[0] = page->first_child_page_no;
+    for (int i = 0; i < page->num_entries; i++)
+    {
+        strcpy(all_keys[i], page->entries[i].key);
+        all_children[i + 1] = page->entries[i].child_page_no;
+    }
+
+    // 找到新键的插入位置
     int pos = 0;
-    while (pos < MAX_SECONDARY_INTERNAL_ENTRIES && strcmp(page->entries[pos].key, key) < 0)
-    {
-        temp_entries[pos] = page->entries[pos];
+    while (pos < page->num_entries && strcmp(all_keys[pos], key) < 0)
         pos++;
-    }
-    strcpy(temp_entries[pos].key, key);
-    temp_entries[pos].child_page_no = child_page_no;
-    for (int i = pos; i < MAX_SECONDARY_INTERNAL_ENTRIES; i++)
+
+    // 在临时序列中插入新键和新指针
+    for (int i = page->num_entries; i > pos; i--)
     {
-        temp_entries[i + 1] = page->entries[i];
+        strcpy(all_keys[i], all_keys[i - 1]);
+        all_children[i + 1] = all_children[i];
     }
+    strcpy(all_keys[pos], key);
+    all_children[pos + 1] = child_page_no;
 
+    // 2. 计算分裂点，并将中间键向上推
     int mid_idx = (MAX_SECONDARY_INTERNAL_ENTRIES + 1) / 2;
-    strcpy(out_split_key, temp_entries[mid_idx].key);
+    strcpy(out_split_key, all_keys[mid_idx]);
 
+    // 3. 分配新页
     uint32_t new_page_no;
     BufferFrame *new_frame = buf_alloc_frame(space_id, PAGE_TYPE_SECONDARY_INTERNAL, &new_page_no);
     if (!new_frame)
         return -1;
     *out_new_page_no = new_page_no;
     SecondaryInternalPage *new_page = (SecondaryInternalPage *)new_frame->data;
-
     ((BTreeMeta *)buf_get_frame(space_id, 0)->data)->total_pages++;
     buf_mark_dirty(space_id, 0);
 
+    // 4. 用分裂后的前半部分，重写老页
     page->num_entries = mid_idx;
+    // first_child_page_no 不变，因为它就是 all_children[0]
+    for (int i = 0; i < mid_idx; i++)
+    {
+        strcpy(page->entries[i].key, all_keys[i]);
+        page->entries[i].child_page_no = all_children[i + 1];
+    }
+
+    // 5. 用分裂后的后半部分，填充新页
     new_page->num_entries = MAX_SECONDARY_INTERNAL_ENTRIES - mid_idx;
-    new_page->first_child_page_no = temp_entries[mid_idx].child_page_no;
-    memcpy(new_page->entries, &temp_entries[mid_idx + 1], new_page->num_entries * sizeof(SecondaryInternalEntry));
+    new_page->first_child_page_no = all_children[mid_idx + 1];
+    for (int i = 0; i < new_page->num_entries; i++)
+    {
+        strcpy(new_page->entries[i].key, all_keys[mid_idx + 1 + i]);
+        new_page->entries[i].child_page_no = all_children[mid_idx + 2 + i];
+    }
 
     buf_mark_dirty(space_id, page_no);
     return 0;

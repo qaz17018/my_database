@@ -20,7 +20,7 @@ int main()
 
     buf_init();
 
-    const int num_insertions = 200000; // 我们将插入一百万条记录
+    const int num_insertions = 1200000; // 我们将插入一百万条记录
     printf("--- Phase 1: Inserting %d records with usernames ---\n", num_insertions);
     printf("This will update both primary and secondary B-Trees.\n");
 
@@ -61,7 +61,7 @@ int main()
     // ======================================================================
     printf("--- Phase 3: Secondary Index Query Performance Test ---\n");
 
-    const int num_queries = 200000; // 我们将执行1万次随机查询
+    const int num_queries = 1200000; // 我们将执行1万次随机查询
     printf("Preparing to perform %d random lookups via username...\n", num_queries);
 
     // 清空缓存池，模拟从磁盘查询的“冷启动”
@@ -94,12 +94,7 @@ int main()
 
         // 2. 通过辅助索引查找，获取主键ID
         uint32_t pk_found = table_search_pk_by_username(space_id, search_username);
-        if (pk_found != random_user_num)
-        {
-            printf("id: %d\n", random_user_num);
-            continue;
-        }
-        // assert(pk_found == random_user_num); // 验证找到的主键是否正确
+        assert(pk_found == random_user_num); // 验证找到的主键是否正确
 
         // 3. 回表：通过主键ID，查找完整的行数据
         Row *found_row = b_tree_search(space_id, pk_found);
