@@ -2,9 +2,12 @@
 #include "buffer_pool.h"
 #include "leaf_page.h"
 #include "internal_page.h"
-#include "secondary_index_page.h"
+#include "secondary_b_tree.h"
 #include <stdio.h>
 #include <string.h>
+
+static uint32_t b_tree_find_leaf_page_internal(uint32_t space_id, uint32_t page_no, uint32_t id);
+static uint32_t b_tree_find_leaf_page(uint32_t space_id, uint32_t id);
 
 static BTreeMeta *get_meta(uint32_t space_id)
 {
@@ -257,4 +260,70 @@ static Row *b_tree_search_internal(uint32_t space_id, uint32_t page_no, uint32_t
 uint32_t table_search_pk_by_username(uint32_t space_id, const char *username)
 {
     return secondary_b_tree_search(space_id, username);
+}
+
+// [新增] 查找包含指定id的叶子页的递归辅助函数
+static uint32_t b_tree_find_leaf_page_internal(uint32_t space_id, uint32_t page_no, uint32_t id)
+{
+    BufferFrame *frame = buf_get_frame(space_id, page_no);
+    if (!frame)
+        return 0; // 0 代表未找到或错误
+
+    if (frame->page_type == PAGE_TYPE_LEAF)
+    {
+        // 已经到达叶子层，返回当前页号
+        return page_no;
+    }
+
+    if (frame->page_type == PAGE_TYPE_INTERNAL)
+    {
+        // 在内节点中，找到下一个要访问的子节点，并递归深入
+        InternalPage *internal = (InternalPage *)frame->data;
+        uint32_t child_page_no = internal_page_get_child(internal, id);
+        return b_tree_find_leaf_page_internal(space_id, child_page_no, id);
+    }
+
+    return 0; // 未知页面类型
+}
+
+// [新增] 查找包含指定id的叶子页的顶层入口函数
+static uint32_t b_tree_find_leaf_page(uint32_t space_id, uint32_t id)
+{
+    BTreeMeta *meta = get_meta(space_id);
+    if (!meta || meta->root_page_no == 0)
+        return 0;
+    return b_tree_find_leaf_page_internal(space_id, meta->root_page_no, id);
+}
+
+// [核心修改] 用我们新的追踪和擦除功能，重写顶层删除函数
+int table_delete_row(uint32_t space_id, uint32_t id_to_delete)
+{
+    // TODO: 完整的删除，还需要同步删除所有辅助索引。我们先简化，只删除主索引。
+
+    // 1. 调用我们的新“追踪”函数，找到包含目标id的叶子页的页号
+    uint32_t leaf_page_no = b_tree_find_leaf_page(space_id, id_to_delete);
+
+    if (leaf_page_no == 0)
+    {
+        printf("Row with id %d not found in any leaf page.\n", id_to_delete);
+        return -1; // 未找到记录
+    }
+
+    // 2. 获取该叶子页的内存指针
+    BufferFrame *frame = buf_get_frame(space_id, leaf_page_no);
+    if (!frame)
+        return -1;
+    LeafPage *page = (LeafPage *)frame->data;
+
+    // 3. 调用我们的新“擦除”函数，从这个具体的叶子页中删除记录
+    if (leaf_page_delete(space_id, leaf_page_no, page, id_to_delete) == 0)
+    {
+        return 0; // 成功
+    }
+    else
+    {
+        // 理论上，如果find_leaf_page找到了页，这里不应该失败，但做好保护
+        printf("Row with id %d found on page %u, but failed to delete.\n", id_to_delete, leaf_page_no);
+        return -1; // 删除失败
+    }
 }

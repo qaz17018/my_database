@@ -19,6 +19,9 @@ int b_tree_insert(uint32_t space_id, const Row *row);
 
 Row *b_tree_search(uint32_t space_id, uint32_t id);
 
+// [新增] 声明我们新的顶层删除函数
+int table_delete_row(uint32_t space_id, uint32_t id_to_delete);
+
 // int b_tree_insert(uint32_t space_id, uint32_t root_page_no, const Row *row);
 
 #endif

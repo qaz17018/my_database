@@ -21,4 +21,6 @@ int leaf_page_insert_or_split(uint32_t space_id, uint32_t page_no, const Row *ro
 
 Row *leaf_page_search(LeafPage *page, uint32_t id);
 
+int leaf_page_delete(uint32_t space_id, uint32_t page_no, LeafPage *page, uint32_t id);
+
 #endif

@@ -143,3 +143,51 @@ int leaf_page_insert_or_split(uint32_t space_id, uint32_t page_no, const Row *ro
 
     return 0;
 }
+
+// [新增] 从一个叶子页中删除一条记录
+int leaf_page_delete(uint32_t space_id, uint32_t page_no, LeafPage *page, uint32_t id)
+{
+    // 1. 使用二分查找，找到要删除的记录的索引(pos)
+    int left = 0, right = page->num_records - 1, pos = -1;
+    while (left <= right)
+    {
+        int mid = left + (right - left) / 2;
+        if (page->records[mid].id == id)
+        {
+            pos = mid;
+            break;
+        }
+        else if (page->records[mid].id < id)
+        {
+            left = mid + 1;
+        }
+        else
+        {
+            right = mid - 1;
+        }
+    }
+
+    // 2. 如果没有找到，返回失败
+    if (pos == -1)
+    {
+        return -1; // Record not found
+    }
+
+    // 3. 将pos之后的所有记录，向前移动一位，覆盖掉被删除的记录
+    for (int i = pos; i < page->num_records - 1; i++)
+    {
+        page->records[i] = page->records[i + 1];
+    }
+
+    // 4. 更新记录总数
+    page->num_records--;
+
+    // 5. 将页面标记为“脏”，以便写回磁盘
+    buf_mark_dirty(space_id, page_no);
+
+    // TODO: 在这里检查页面是否因为删除而变得“欠载”(underflow)
+    // 如果 page->num_records < MAX_LEAF_RECORDS / 2，就需要进行合并或重分配
+    // 这是我们下一步要处理的复杂情况
+
+    return 0; // 删除成功
+}
