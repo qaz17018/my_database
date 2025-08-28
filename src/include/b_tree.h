@@ -24,4 +24,6 @@ int table_delete_row(uint32_t space_id, uint32_t id_to_delete);
 
 // int b_tree_insert(uint32_t space_id, uint32_t root_page_no, const Row *row);
 
+int b_tree_delete_internal(uint32_t space_id, uint32_t page_no, uint32_t id);
+
 #endif

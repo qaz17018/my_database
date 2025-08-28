@@ -248,3 +248,36 @@ int internal_page_insert_or_split(uint32_t space_id, uint32_t page_no, uint32_t 
 
     return 0;
 }
+
+// [新增] 獲取子節點在父節點條目中的索引
+int internal_page_get_child_index_by_page(InternalPage *page, uint32_t child_page_no)
+{
+    if (page->first_child_page_no == child_page_no)
+    {
+        return -1; // -1 代表是最左侧的孩子
+    }
+    for (int i = 0; i < page->num_entries; i++)
+    {
+        if (page->entries[i].child_page_no == child_page_no)
+        {
+            return i; // 返回在 entries 数组中的索引
+        }
+    }
+    return -2; // -2 代表未找到，是个错误
+}
+
+// [新增] 从内节点中删除一个条目
+void internal_page_delete_entry(uint32_t space_id, uint32_t page_no, InternalPage *page, int entry_index)
+{
+    if (entry_index < 0 || entry_index >= page->num_entries)
+    {
+        return; // 无效索引
+    }
+    // 将指定索引之后的所有条目，向前移动一位
+    for (int i = entry_index; i < page->num_entries - 1; i++)
+    {
+        page->entries[i] = page->entries[i + 1];
+    }
+    page->num_entries--;
+    buf_mark_dirty(space_id, page_no);
+}

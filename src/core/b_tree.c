@@ -9,6 +9,151 @@
 static uint32_t b_tree_find_leaf_page_internal(uint32_t space_id, uint32_t page_no, uint32_t id);
 static uint32_t b_tree_find_leaf_page(uint32_t space_id, uint32_t id);
 
+// [新增] 重新分配叶子节点记录的实现
+static void leaf_page_redistribute(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, int underflow_child_index,
+                                   uint32_t underflow_page_no, LeafPage *underflow_page,
+                                   uint32_t donor_page_no, LeafPage *donor_page)
+{
+    // 如果 donor_page 是右兄弟
+    if (underflow_page->next_leaf == donor_page_no)
+    {
+        // 1. 从右兄弟“借”走第一个记录
+        Row row_to_move = donor_page->records[0];
+
+        // 2. 将该记录追加到欠载节点的末尾
+        underflow_page->records[underflow_page->num_records] = row_to_move;
+        underflow_page->num_records++;
+
+        // 3. 更新右兄弟的内容：所有记录左移一位
+        for (int i = 0; i < donor_page->num_records - 1; i++)
+        {
+            donor_page->records[i] = donor_page->records[i + 1];
+        }
+        donor_page->num_records--;
+
+        // 4. [关键] 更新父节点中，指向右兄弟的那个“路标”键
+        // 新的路标键，就是右兄弟移动后的新“最小键”
+        parent_page->entries[underflow_child_index + 1].key = donor_page->records[0].id;
+    }
+    // 如果 donor_page 是左兄弟
+    else
+    {
+        // 1. 从左兄弟“借”走最后一个记录
+        Row row_to_move = donor_page->records[donor_page->num_records - 1];
+        donor_page->num_records--;
+
+        // 2. 将欠载节点的所有记录右移一位，为新记录腾出空间
+        for (int i = underflow_page->num_records; i > 0; i--)
+        {
+            underflow_page->records[i] = underflow_page->records[i - 1];
+        }
+
+        // 3. 将借来的记录插入到欠载节点的开头
+        underflow_page->records[0] = row_to_move;
+        underflow_page->num_records++;
+
+        // 4. [关键] 更新父节点中，指向欠载节点(它现在是右边那个)的那个“路标”键
+        // 新的路标键，就是欠载节点收到的新“最小键”
+        parent_page->entries[underflow_child_index].key = underflow_page->records[0].id;
+    }
+
+    // 标记所有被修改的页为脏页
+    buf_mark_dirty(space_id, parent_page_no);
+    buf_mark_dirty(space_id, underflow_page_no);
+    buf_mark_dirty(space_id, donor_page_no);
+}
+
+// [新增] 合并两个叶子节点的实现
+static void leaf_page_merge(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, int left_child_index,
+                            uint32_t left_page_no, LeafPage *left_page,
+                            uint32_t right_page_no, LeafPage *right_page)
+{
+    // 1. 将右节点的所有记录，全部拷贝到左节点的末尾
+    memcpy(&left_page->records[left_page->num_records], right_page->records, right_page->num_records * sizeof(Row));
+    left_page->num_records += right_page->num_records;
+
+    // 2. 更新叶子节点的链表，让左节点指向右节点的下一个节点，跳过右节点
+    left_page->next_leaf = right_page->next_leaf;
+
+    // 3. [关键] 在父节点中，删除指向右节点的那个“路标”
+    // 这将是下一步实现内节点欠载的关键
+    internal_page_delete_entry(space_id, parent_page_no, parent_page, left_child_index + 1);
+
+    // 标记被修改的页
+    buf_mark_dirty(space_id, parent_page_no);
+    buf_mark_dirty(space_id, left_page_no);
+    // 右节点已被废弃，无需标记，将来可以加入到空闲列表进行重用
+}
+
+// [重写] 实现 handle_leaf_underflow 的完整决策与调用逻辑
+static void handle_leaf_underflow(uint32_t space_id, uint32_t parent_page_no, uint32_t child_page_no, int child_index_in_parent)
+{
+    BufferFrame *parent_frame = buf_get_frame(space_id, parent_page_no);
+    InternalPage *parent_page = (InternalPage *)parent_frame->data;
+    BufferFrame *child_frame = buf_get_frame(space_id, child_page_no);
+    LeafPage *child_page = (LeafPage *)child_frame->data;
+
+    // --- 步骤1: 优先尝试从右兄弟“借” ---
+    // 条件：必须存在右兄弟，并且它足够“富裕”
+    if (child_index_in_parent < parent_page->num_entries - 1)
+    {
+        uint32_t right_sibling_no = parent_page->entries[child_index_in_parent + 1].child_page_no;
+        BufferFrame *right_sibling_frame = buf_get_frame(space_id, right_sibling_no);
+        LeafPage *right_sibling = (LeafPage *)right_sibling_frame->data;
+        if (right_sibling->num_records > MAX_LEAF_RECORDS / 2)
+        {
+            printf("Redistributing from right sibling for page %u\n", child_page_no);
+            leaf_page_redistribute(space_id, parent_page_no, parent_page, child_index_in_parent,
+                                   child_page_no, child_page, right_sibling_no, right_sibling);
+            return;
+        }
+    }
+
+    // --- 步骤2: 其次尝试从左兄弟“借” ---
+    // 条件：必须存在左兄弟，并且它足够“富裕”
+    if (child_index_in_parent > 0)
+    {
+        uint32_t left_sibling_no = parent_page->entries[child_index_in_parent - 1].child_page_no;
+        BufferFrame *left_sibling_frame = buf_get_frame(space_id, left_sibling_no);
+        LeafPage *left_sibling = (LeafPage *)left_sibling_frame->data;
+        if (left_sibling->num_records > MAX_LEAF_RECORDS / 2)
+        {
+            printf("Redistributing from left sibling for page %u\n", child_page_no);
+            leaf_page_redistribute(space_id, parent_page_no, parent_page, child_index_in_parent,
+                                   child_page_no, child_page, left_sibling_no, left_sibling);
+            return;
+        }
+    }
+
+    // --- 步骤3: 邻居都很“穷”，只能合并 ---
+    if (child_index_in_parent < parent_page->num_entries - 1)
+    {
+        // 优先和右兄弟合并
+        printf("Merging page %u with its right sibling\n", child_page_no);
+        uint32_t right_sibling_no = parent_page->entries[child_index_in_parent + 1].child_page_no;
+        BufferFrame *right_sibling_frame = buf_get_frame(space_id, right_sibling_no);
+        // 合并总是将右边合并到左边
+        leaf_page_merge(space_id, parent_page_no, parent_page, child_index_in_parent,
+                        child_page_no, child_page, right_sibling_no, (LeafPage *)right_sibling_frame->data);
+    }
+    else
+    {
+        // 否则和左兄弟合并
+        printf("Merging page %u with its left sibling\n", child_page_no);
+        uint32_t left_sibling_no = parent_page->entries[child_index_in_parent - 1].child_page_no;
+        BufferFrame *left_sibling_frame = buf_get_frame(space_id, left_sibling_no);
+        leaf_page_merge(space_id, parent_page_no, parent_page, child_index_in_parent - 1,
+                        left_sibling_no, (LeafPage *)left_sibling_frame->data, child_page_no, child_page);
+    }
+}
+
+// ... handle_internal_underflow 的签名也一并修正 ...
+static void handle_internal_underflow(uint32_t space_id, uint32_t parent_page_no, uint32_t child_page_no, int child_index)
+{
+    // TODO: 实现内节点的重新分配或合并
+    printf("Placeholder: Handling internal underflow for page %u.\n", child_page_no);
+}
+
 static BTreeMeta *get_meta(uint32_t space_id)
 {
     BufferFrame *frame = buf_get_frame(space_id, 0);
@@ -326,4 +471,76 @@ int table_delete_row(uint32_t space_id, uint32_t id_to_delete)
         printf("Row with id %d found on page %u, but failed to delete.\n", id_to_delete, leaf_page_no);
         return -1; // 删除失败
     }
+}
+
+// [核心修正] 修正 b_tree_delete_internal 中对处理函数的调用
+int b_tree_delete_internal(uint32_t space_id, uint32_t page_no, uint32_t id)
+{
+    BufferFrame *frame = buf_get_frame(space_id, page_no);
+    if (!frame)
+        return -1;
+
+    // --- Case 1: 当前節點是葉子節點 ---
+    if (frame->page_type == PAGE_TYPE_LEAF)
+    {
+        return leaf_page_delete(space_id, page_no, (LeafPage *)frame->data, id);
+    }
+
+    // --- Case 2: 當前節點是內節點 ---
+    if (frame->page_type == PAGE_TYPE_INTERNAL)
+    {
+        InternalPage *page = (InternalPage *)frame->data;
+        uint32_t child_page_no = internal_page_get_child(page, id);
+        // [修正] get_child_index 需要的是 child_page_no，而不是 key
+        // 我们需要一个新的辅助函数来通过 page_no 找 index
+        int child_index = internal_page_get_child_index_by_page(page, child_page_no);
+
+        if (b_tree_delete_internal(space_id, child_page_no, id) != 0)
+        {
+            return -1;
+        }
+
+        BufferFrame *child_frame = buf_get_frame(space_id, child_page_no);
+        if (!child_frame)
+            return -1;
+
+        if (child_frame->page_type == PAGE_TYPE_LEAF)
+        {
+            LeafPage *child_leaf = (LeafPage *)child_frame->data;
+            if (child_leaf->num_records < MAX_LEAF_RECORDS / 2)
+            {
+                // [修正] 调用拥有正确签名的函数
+                handle_leaf_underflow(space_id, page_no, child_page_no, child_index);
+            }
+        }
+        else
+        {
+            InternalPage *child_internal = (InternalPage *)child_frame->data;
+            if (child_internal->num_entries < MAX_INTERNAL_ENTRIES / 2)
+            {
+                handle_internal_underflow(space_id, page_no, child_page_no, child_index);
+            }
+        }
+        return 0;
+    }
+    return -1;
+}
+
+// [重寫] 頂層刪除函數，現在它只負責啟動遞歸
+int table_delete_row(uint32_t space_id, uint32_t id_to_delete)
+{
+    BTreeMeta *meta = get_meta(space_id);
+    if (!meta)
+        return -1;
+
+    if (b_tree_delete_internal(space_id, meta->root_page_no, id_to_delete) != 0)
+    {
+        return -1; // 刪除失敗
+    }
+
+    // TODO: 處理刪除後根節點可能變為空的情況，這會導致樹的高度降低
+
+    // TODO: 同步刪除所有輔助索引
+
+    return 0;
 }

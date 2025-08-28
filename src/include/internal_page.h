@@ -40,4 +40,11 @@ int internal_page_insert(uint32_t space_id, uint32_t page_no, InternalPage *page
  */
 int internal_page_insert_or_split(uint32_t space_id, uint32_t page_no, uint32_t key, uint32_t child_page_no, uint32_t *out_split_key, uint32_t *out_new_page_no);
 
+// [替换] 用更准确的函数替换
+int internal_page_get_child_index_by_page(InternalPage *page, uint32_t child_page_no);
+
+// ...
+// [新增] 声明从内节点删除条目的函数
+void internal_page_delete_entry(uint32_t space_id, uint32_t page_no, InternalPage *page, int entry_index);
+
 #endif
