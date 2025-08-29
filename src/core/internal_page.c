@@ -249,21 +249,22 @@ int internal_page_insert_or_split(uint32_t space_id, uint32_t page_no, uint32_t 
     return 0;
 }
 
-// [新增] 獲取子節點在父節點條目中的索引
-int internal_page_get_child_index_by_page(InternalPage *page, uint32_t child_page_no)
+// [重写] internal_page_get_child_index_by_page
+// 在 b_tree.c 中声明为 static，因为它只在这里被 b_tree_delete_internal 使用
+static int internal_page_get_child_index_by_page(InternalPage *page, uint32_t child_page_no)
 {
     if (page->first_child_page_no == child_page_no)
     {
-        return -1; // -1 代表是最左侧的孩子
+        return -1;
     }
     for (int i = 0; i < page->num_entries; i++)
     {
         if (page->entries[i].child_page_no == child_page_no)
         {
-            return i; // 返回在 entries 数组中的索引
+            return i;
         }
     }
-    return -2; // -2 代表未找到，是个错误
+    return -2;
 }
 
 // [新增] 从内节点中删除一个条目

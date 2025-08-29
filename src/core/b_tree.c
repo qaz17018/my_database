@@ -9,8 +9,8 @@
 static int b_tree_insert_internal(uint32_t space_id, uint32_t page_no, const Row *row, uint32_t *out_split_key, uint32_t *out_new_page_no);
 static uint32_t b_tree_find_leaf_page_internal(uint32_t space_id, uint32_t page_no, uint32_t id);
 static uint32_t b_tree_find_leaf_page(uint32_t space_id, uint32_t id);
-static void handle_leaf_underflow(uint32_t space_id, uint32_t parent_page_no, uint32_t child_page_no, int child_index_in_parent);
-static void handle_internal_underflow(uint32_t space_id, uint32_t parent_page_no, uint32_t child_page_no, int child_index_in_parent);
+static void handle_leaf_underflow(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, uint32_t child_page_no, int child_index);
+static void handle_internal_underflow(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, uint32_t child_page_no, int child_index);
 static void leaf_page_redistribute(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, int underflow_child_index,
                                    uint32_t underflow_page_no, LeafPage *underflow_page,
                                    uint32_t donor_page_no, LeafPage *donor_page);
@@ -386,64 +386,88 @@ static void leaf_page_merge(uint32_t space_id, uint32_t parent_page_no, Internal
     // 右节点已被废弃，无需标记，将来可以加入到空闲列表进行重用
 }
 
-// [重写] 实现 handle_leaf_underflow 的完整决策与调用逻辑
-static void handle_leaf_underflow(uint32_t space_id, uint32_t parent_page_no, uint32_t child_page_no, int child_index_in_parent)
+// [重写] 用一个更清晰、更简单的逻辑重写 handle_leaf_underflow
+static void handle_leaf_underflow(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, uint32_t child_page_no, int child_index)
 {
-    BufferFrame *parent_frame = buf_get_frame(space_id, parent_page_no);
-    InternalPage *parent_page = (InternalPage *)parent_frame->data;
     BufferFrame *child_frame = buf_get_frame(space_id, child_page_no);
     LeafPage *child_page = (LeafPage *)child_frame->data;
 
-    // --- 步骤1: 优先尝试从右兄弟“借” ---
-    // 条件：必须存在右兄弟，并且它足够“富裕”
-    if (child_index_in_parent < parent_page->num_entries - 1)
+    // --- 寻找兄弟节点 ---
+    // child_index 是欠载节点在父节点 entries 数组中的索引。-1表示它是 first_child
+
+    // 尝试获取左兄弟
+    uint32_t left_sibling_no = 0;
+    if (child_index > 0)
     {
-        uint32_t right_sibling_no = parent_page->entries[child_index_in_parent + 1].child_page_no;
+        left_sibling_no = parent_page->entries[child_index - 1].child_page_no;
+    }
+    else if (child_index == 0)
+    {
+        left_sibling_no = parent_page->first_child_page_no;
+    }
+    // 特殊情况：如果child_index是-1(最左孩子)，它的左邻居是它自己右边的第一个(entries[0])的左边那个，也就是它自己。
+    // 为了简化，我们只考虑 entries[-1] 和 entries[0]
+    if (child_index == -1)
+    {                        // 欠载节点是最左侧的孩子(first_child)
+        left_sibling_no = 0; // 它没有左兄弟
+    }
+    else if (child_index == 0)
+    {
+        left_sibling_no = parent_page->first_child_page_no;
+    }
+    else
+    {
+        left_sibling_no = parent_page->entries[child_index - 1].child_page_no;
+    }
+
+    // 尝试获取右兄弟
+    uint32_t right_sibling_no = 0;
+    if (child_index == -1)
+    {
+        right_sibling_no = parent_page->entries[0].child_page_no;
+    }
+    else if (child_index < parent_page->num_entries - 1)
+    {
+        right_sibling_no = parent_page->entries[child_index + 1].child_page_no;
+    }
+
+    // --- 决策：优先重分配 ---
+    // 尝试从右兄弟借
+    if (right_sibling_no != 0)
+    {
         BufferFrame *right_sibling_frame = buf_get_frame(space_id, right_sibling_no);
         LeafPage *right_sibling = (LeafPage *)right_sibling_frame->data;
         if (right_sibling->num_records > MAX_LEAF_RECORDS / 2)
         {
-            printf("Redistributing from right sibling for page %u\n", child_page_no);
-            leaf_page_redistribute(space_id, parent_page_no, parent_page, child_index_in_parent,
+            leaf_page_redistribute(space_id, parent_page_no, parent_page, child_index,
                                    child_page_no, child_page, right_sibling_no, right_sibling);
             return;
         }
     }
-
-    // --- 步骤2: 其次尝试从左兄弟“借” ---
-    // 条件：必须存在左兄弟，并且它足够“富裕”
-    if (child_index_in_parent > 0)
+    // 尝试从左兄弟借
+    if (left_sibling_no != 0)
     {
-        uint32_t left_sibling_no = parent_page->entries[child_index_in_parent - 1].child_page_no;
         BufferFrame *left_sibling_frame = buf_get_frame(space_id, left_sibling_no);
         LeafPage *left_sibling = (LeafPage *)left_sibling_frame->data;
         if (left_sibling->num_records > MAX_LEAF_RECORDS / 2)
         {
-            printf("Redistributing from left sibling for page %u\n", child_page_no);
-            leaf_page_redistribute(space_id, parent_page_no, parent_page, child_index_in_parent,
+            leaf_page_redistribute(space_id, parent_page_no, parent_page, child_index,
                                    child_page_no, child_page, left_sibling_no, left_sibling);
             return;
         }
     }
 
-    // --- 步骤3: 邻居都很“穷”，只能合并 ---
-    if (child_index_in_parent < parent_page->num_entries - 1)
+    // --- 决策：只能合并 ---
+    if (right_sibling_no != 0)
     {
-        // 优先和右兄弟合并
-        printf("Merging page %u with its right sibling\n", child_page_no);
-        uint32_t right_sibling_no = parent_page->entries[child_index_in_parent + 1].child_page_no;
         BufferFrame *right_sibling_frame = buf_get_frame(space_id, right_sibling_no);
-        // 合并总是将右边合并到左边
-        leaf_page_merge(space_id, parent_page_no, parent_page, child_index_in_parent,
+        leaf_page_merge(space_id, parent_page_no, parent_page, child_index,
                         child_page_no, child_page, right_sibling_no, (LeafPage *)right_sibling_frame->data);
     }
     else
-    {
-        // 否则和左兄弟合并
-        printf("Merging page %u with its left sibling\n", child_page_no);
-        uint32_t left_sibling_no = parent_page->entries[child_index_in_parent - 1].child_page_no;
+    { // 只能和左兄弟合并
         BufferFrame *left_sibling_frame = buf_get_frame(space_id, left_sibling_no);
-        leaf_page_merge(space_id, parent_page_no, parent_page, child_index_in_parent - 1,
+        leaf_page_merge(space_id, parent_page_no, parent_page, child_index - 1,
                         left_sibling_no, (LeafPage *)left_sibling_frame->data, child_page_no, child_page);
     }
 }
@@ -518,148 +542,160 @@ static void internal_page_merge(uint32_t space_id, uint32_t parent_page_no, Inte
     buf_mark_dirty(space_id, left_page_no);
 }
 
-// [重写] 实现 handle_internal_underflow 的完整决策与调用逻辑
-static void handle_internal_underflow(uint32_t space_id, uint32_t parent_page_no, uint32_t child_page_no, int child_index_in_parent)
+static void handle_internal_underflow(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, uint32_t child_page_no, int child_index)
 {
-    BufferFrame *parent_frame = buf_get_frame(space_id, parent_page_no);
-    InternalPage *parent_page = (InternalPage *)parent_frame->data;
     BufferFrame *child_frame = buf_get_frame(space_id, child_page_no);
     InternalPage *child_page = (InternalPage *)child_frame->data;
 
-    // 逻辑与 handle_leaf_underflow 完全平行
-    // 1. 尝试从右兄弟“借”
-    if (child_index_in_parent < parent_page->num_entries - 1)
+    // --- 寻找兄弟节点 (逻辑与叶子节点处理时完全一致) ---
+    uint32_t left_sibling_no = 0;
+    if (child_index > 0)
     {
-        uint32_t right_sibling_no = parent_page->entries[child_index_in_parent + 1].child_page_no;
+        left_sibling_no = parent_page->entries[child_index - 1].child_page_no;
+    }
+    else if (child_index == 0)
+    {
+        left_sibling_no = parent_page->first_child_page_no;
+    }
+
+    // 如果 child_index 是 -1 (最左孩子), 它没有严格意义的左兄弟
+    if (child_index == -1)
+    {
+        left_sibling_no = 0;
+    }
+
+    uint32_t right_sibling_no = 0;
+    if (child_index < parent_page->num_entries)
+    {
+        right_sibling_no = (child_index == -1) ? parent_page->entries[0].child_page_no : parent_page->entries[child_index + 1].child_page_no;
+    }
+
+    // --- 决策：优先重分配 ---
+    // 尝试从右兄弟借
+    if (right_sibling_no != 0)
+    {
         BufferFrame *right_sibling_frame = buf_get_frame(space_id, right_sibling_no);
         InternalPage *right_sibling = (InternalPage *)right_sibling_frame->data;
         if (right_sibling->num_entries > MAX_INTERNAL_ENTRIES / 2)
         {
-            internal_page_redistribute(space_id, parent_page_no, parent_page, child_index_in_parent,
+            internal_page_redistribute(space_id, parent_page_no, parent_page, child_index,
                                        child_page_no, child_page, right_sibling_no, right_sibling);
             return;
         }
     }
-
-    // 2. 尝试从左兄弟“借”
-    if (child_index_in_parent > 0)
+    // 尝试从左兄弟借
+    if (left_sibling_no != 0)
     {
-        uint32_t left_sibling_no = parent_page->entries[child_index_in_parent - 1].child_page_no;
         BufferFrame *left_sibling_frame = buf_get_frame(space_id, left_sibling_no);
         InternalPage *left_sibling = (InternalPage *)left_sibling_frame->data;
         if (left_sibling->num_entries > MAX_INTERNAL_ENTRIES / 2)
         {
-            internal_page_redistribute(space_id, parent_page_no, parent_page, child_index_in_parent,
+            internal_page_redistribute(space_id, parent_page_no, parent_page, child_index,
                                        child_page_no, child_page, left_sibling_no, left_sibling);
             return;
         }
     }
 
-    // 3. 只能合并
-    if (child_index_in_parent < parent_page->num_entries - 1)
+    // --- 决策：只能合并 ---
+    if (right_sibling_no != 0)
     {
-        uint32_t right_sibling_no = parent_page->entries[child_index_in_parent + 1].child_page_no;
+        // 优先和右兄弟合并
         BufferFrame *right_sibling_frame = buf_get_frame(space_id, right_sibling_no);
-        internal_page_merge(space_id, parent_page_no, parent_page, child_index_in_parent,
+        internal_page_merge(space_id, parent_page_no, parent_page, child_index,
                             child_page_no, child_page, right_sibling_no, (InternalPage *)right_sibling_frame->data);
     }
     else
-    {
-        uint32_t left_sibling_no = parent_page->entries[child_index_in_parent - 1].child_page_no;
+    { // 只能和左兄弟合并
         BufferFrame *left_sibling_frame = buf_get_frame(space_id, left_sibling_no);
-        internal_page_merge(space_id, parent_page_no, parent_page, child_index_in_parent - 1,
+        internal_page_merge(space_id, parent_page_no, parent_page, child_index - 1,
                             left_sibling_no, (InternalPage *)left_sibling_frame->data, child_page_no, child_page);
     }
 }
 
-// [核心修改] 用我们新的追踪和擦除功能，重写顶层删除函数
-int table_delete_row(uint32_t space_id, uint32_t id_to_delete)
-{
-    // TODO: 完整的删除，还需要同步删除所有辅助索引。我们先简化，只删除主索引。
-
-    // 1. 调用我们的新“追踪”函数，找到包含目标id的叶子页的页号
-    uint32_t leaf_page_no = b_tree_find_leaf_page(space_id, id_to_delete);
-
-    if (leaf_page_no == 0)
-    {
-        printf("Row with id %d not found in any leaf page.\n", id_to_delete);
-        return -1; // 未找到记录
-    }
-
-    // 2. 获取该叶子页的内存指针
-    BufferFrame *frame = buf_get_frame(space_id, leaf_page_no);
-    if (!frame)
-        return -1;
-    LeafPage *page = (LeafPage *)frame->data;
-
-    // 3. 调用我们的新“擦除”函数，从这个具体的叶子页中删除记录
-    if (leaf_page_delete(space_id, leaf_page_no, page, id_to_delete) == 0)
-    {
-        return 0; // 成功
-    }
-    else
-    {
-        // 理论上，如果find_leaf_page找到了页，这里不应该失败，但做好保护
-        printf("Row with id %d found on page %u, but failed to delete.\n", id_to_delete, leaf_page_no);
-        return -1; // 删除失败
-    }
-}
-
-// [核心修正] 修正 b_tree_delete_internal 中对处理函数的调用
+// [重写] b_tree_delete_internal，确保指针安全
 int b_tree_delete_internal(uint32_t space_id, uint32_t page_no, uint32_t id)
 {
+    if (page_no == 0)
+        return -1;
     BufferFrame *frame = buf_get_frame(space_id, page_no);
     if (!frame)
         return -1;
 
-    // --- Case 1: 当前節點是葉子節點 ---
     if (frame->page_type == PAGE_TYPE_LEAF)
     {
         return leaf_page_delete(space_id, page_no, (LeafPage *)frame->data, id);
     }
 
-    // --- Case 2: 當前節點是內節點 ---
     if (frame->page_type == PAGE_TYPE_INTERNAL)
     {
-        InternalPage *page = (InternalPage *)frame->data;
-        uint32_t child_page_no = internal_page_get_child(page, id);
-        // [修正] get_child_index 需要的是 child_page_no，而不是 key
-        // 我们需要一个新的辅助函数来通过 page_no 找 index
-        int child_index = internal_page_get_child_index_by_page(page, child_page_no);
+        InternalPage *page_snapshot = (InternalPage *)malloc(PAGE_DATA_SIZE);
+        memcpy(page_snapshot, frame->data, PAGE_DATA_SIZE);
+
+        uint32_t child_page_no = internal_page_get_child(page_snapshot, id);
 
         if (b_tree_delete_internal(space_id, child_page_no, id) != 0)
         {
+            free(page_snapshot);
             return -1;
         }
 
+        frame = buf_get_frame(space_id, page_no);
+        InternalPage *parent_page_after_recursion = (InternalPage *)frame->data;
+        int child_index = internal_page_get_child_index_by_page(parent_page_after_recursion, child_page_no);
+
         BufferFrame *child_frame = buf_get_frame(space_id, child_page_no);
         if (!child_frame)
+        {
+            free(page_snapshot);
             return -1;
+        }
 
         if (child_frame->page_type == PAGE_TYPE_LEAF)
         {
-            LeafPage *child_leaf = (LeafPage *)child_frame->data;
-
-            printf("DEBUG: Leaf page %u after delete has %u records. (Threshold: < %d)\n",
-                   child_page_no, child_leaf->num_records, MAX_LEAF_RECORDS / 2);
-
-            if (child_leaf->num_records < MAX_LEAF_RECORDS / 2)
+            if (((LeafPage *)child_frame->data)->num_records < MAX_LEAF_RECORDS / 2)
             {
-                // [探针 #2] 如果真的低于了阈值，看看处理函数是否被调用
-                printf("!!! UNDERFLOW DETECTED on leaf page %u, parent %u, child_index %d !!!\n",
-                       child_page_no, page_no, child_index);
-                handle_leaf_underflow(space_id, page_no, child_page_no, child_index);
+                handle_leaf_underflow(space_id, page_no, parent_page_after_recursion, child_page_no, child_index);
             }
         }
         else
         {
-            InternalPage *child_internal = (InternalPage *)child_frame->data;
-            if (child_internal->num_entries < MAX_INTERNAL_ENTRIES / 2)
+            if (((InternalPage *)child_frame->data)->num_entries < MAX_INTERNAL_ENTRIES / 2)
             {
-                handle_internal_underflow(space_id, page_no, child_page_no, child_index);
+                handle_internal_underflow(space_id, page_no, parent_page_after_recursion, child_page_no, child_index);
             }
         }
+        free(page_snapshot);
         return 0;
     }
     return -1;
+}
+
+// [重写] table_delete_row，确保逻辑完整
+int table_delete_row(uint32_t space_id, uint32_t id_to_delete)
+{
+    BTreeMeta *meta = get_meta(space_id);
+    if (!meta)
+        return -1;
+    uint32_t root_page_no = meta->root_page_no;
+    if (root_page_no == 0)
+        return -1;
+
+    if (b_tree_delete_internal(space_id, root_page_no, id_to_delete) != 0)
+    {
+        return -1;
+    }
+
+    // 重新获取最新的根页号
+    meta = get_meta(space_id);
+    root_page_no = meta->root_page_no;
+    BufferFrame *root_frame = buf_get_frame(space_id, root_page_no);
+
+    if (root_frame->page_type == PAGE_TYPE_INTERNAL && ((InternalPage *)root_frame->data)->num_entries == 0)
+    {
+        uint32_t new_root_page_no = ((InternalPage *)root_frame->data)->first_child_page_no;
+        meta->root_page_no = new_root_page_no;
+        buf_mark_dirty(space_id, 0);
+        printf("Tree height decreased. New root is page %u\n", new_root_page_no);
+    }
+    return 0;
 }
