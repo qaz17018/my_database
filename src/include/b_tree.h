@@ -26,4 +26,7 @@ int table_delete_row(uint32_t space_id, uint32_t id_to_delete);
 
 int b_tree_delete_internal(uint32_t space_id, uint32_t page_no, uint32_t id);
 
+// [核心修复] 在这里声明 get_meta 函数，让其他模块可以安全调用
+BTreeMeta *get_meta(uint32_t space_id);
+
 #endif
