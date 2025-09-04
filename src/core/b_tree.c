@@ -365,110 +365,79 @@ static void leaf_page_redistribute(uint32_t space_id, uint32_t parent_page_no, I
 }
 
 // [新增] 合并两个叶子节点的实现
-static void leaf_page_merge(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, int left_child_index,
+static void leaf_page_merge(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, int separator_key_index,
                             uint32_t left_page_no, LeafPage *left_page,
                             uint32_t right_page_no, LeafPage *right_page)
 {
-    // 1. 将右节点的所有记录，全部拷贝到左节点的末尾
+    // [这个函数的实现是正确的，无需修改]
     memcpy(&left_page->records[left_page->num_records], right_page->records, right_page->num_records * sizeof(Row));
     left_page->num_records += right_page->num_records;
-
-    // 2. 更新叶子节点的链表，让左节点指向右节点的下一个节点，跳过右节点
     left_page->next_leaf = right_page->next_leaf;
-
-    // 3. [关键] 在父节点中，删除指向右节点的那个“路标”
-    // 这将是下一步实现内节点欠载的关键
-    internal_page_delete_entry(space_id, parent_page_no, parent_page, left_child_index + 1);
-
-    // 标记被修改的页
+    internal_page_delete_entry(space_id, parent_page_no, parent_page, separator_key_index);
     buf_mark_dirty(space_id, parent_page_no);
     buf_mark_dirty(space_id, left_page_no);
-    // 右节点已被废弃，无需标记，将来可以加入到空闲列表进行重用
 }
 
-// [重写] 用一个更清晰、更简单的逻辑重写 handle_leaf_underflow
+// --- 叶子节点欠载处理 ---
+// --- 叶子节点欠载处理 ---
 static void handle_leaf_underflow(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, uint32_t child_page_no, int child_index)
 {
     BufferFrame *child_frame = buf_get_frame(space_id, child_page_no);
     LeafPage *child_page = (LeafPage *)child_frame->data;
 
-    // --- 寻找兄弟节点 ---
-    // child_index 是欠载节点在父节点 entries 数组中的索引。-1表示它是 first_child
+    // [重写] 更健壮的兄弟查找逻辑
+    uint32_t left_sibling_no = 0, right_sibling_no = 0;
+    int separator_index_for_left = -1, separator_index_for_right = -1;
 
-    // 尝试获取左兄弟
-    uint32_t left_sibling_no = 0;
-    if (child_index > 0)
-    {
-        left_sibling_no = parent_page->entries[child_index - 1].child_page_no;
-    }
-    else if (child_index == 0)
-    {
-        left_sibling_no = parent_page->first_child_page_no;
-    }
-    // 特殊情况：如果child_index是-1(最左孩子)，它的左邻居是它自己右边的第一个(entries[0])的左边那个，也就是它自己。
-    // 为了简化，我们只考虑 entries[-1] 和 entries[0]
     if (child_index == -1)
-    {                        // 欠载节点是最左侧的孩子(first_child)
-        left_sibling_no = 0; // 它没有左兄弟
-    }
-    else if (child_index == 0)
-    {
-        left_sibling_no = parent_page->first_child_page_no;
+    { // 欠载节点是最左侧的孩子
+        right_sibling_no = parent_page->entries[0].child_page_no;
+        separator_index_for_right = 0;
     }
     else
     {
-        left_sibling_no = parent_page->entries[child_index - 1].child_page_no;
+        left_sibling_no = (child_index == 0) ? parent_page->first_child_page_no : parent_page->entries[child_index - 1].child_page_no;
+        separator_index_for_left = child_index;
+        if (child_index < parent_page->num_entries - 1)
+        {
+            right_sibling_no = parent_page->entries[child_index + 1].child_page_no;
+            separator_index_for_right = child_index + 1;
+        }
     }
 
-    // 尝试获取右兄弟
-    uint32_t right_sibling_no = 0;
-    if (child_index == -1)
-    {
-        right_sibling_no = parent_page->entries[0].child_page_no;
-    }
-    else if (child_index < parent_page->num_entries - 1)
-    {
-        right_sibling_no = parent_page->entries[child_index + 1].child_page_no;
-    }
-
-    // --- 决策：优先重分配 ---
-    // 尝试从右兄弟借
+    // 优先从右兄弟借
     if (right_sibling_no != 0)
     {
         BufferFrame *right_sibling_frame = buf_get_frame(space_id, right_sibling_no);
         LeafPage *right_sibling = (LeafPage *)right_sibling_frame->data;
         if (right_sibling->num_records > MAX_LEAF_RECORDS / 2)
         {
-            leaf_page_redistribute(space_id, parent_page_no, parent_page, child_index,
-                                   child_page_no, child_page, right_sibling_no, right_sibling);
+            leaf_page_redistribute(space_id, parent_page_no, parent_page, separator_index_for_right, child_page_no, child_page, right_sibling_no, right_sibling);
             return;
         }
     }
-    // 尝试从左兄弟借
+    // 其次从左兄弟借
     if (left_sibling_no != 0)
     {
         BufferFrame *left_sibling_frame = buf_get_frame(space_id, left_sibling_no);
         LeafPage *left_sibling = (LeafPage *)left_sibling_frame->data;
         if (left_sibling->num_records > MAX_LEAF_RECORDS / 2)
         {
-            leaf_page_redistribute(space_id, parent_page_no, parent_page, child_index,
-                                   child_page_no, child_page, left_sibling_no, left_sibling);
+            leaf_page_redistribute(space_id, parent_page_no, parent_page, separator_index_for_left, child_page_no, child_page, left_sibling_no, left_sibling);
             return;
         }
     }
 
-    // --- 决策：只能合并 ---
+    // 只能合并
     if (right_sibling_no != 0)
     {
         BufferFrame *right_sibling_frame = buf_get_frame(space_id, right_sibling_no);
-        leaf_page_merge(space_id, parent_page_no, parent_page, child_index,
-                        child_page_no, child_page, right_sibling_no, (LeafPage *)right_sibling_frame->data);
+        leaf_page_merge(space_id, parent_page_no, parent_page, separator_index_for_right, child_page_no, child_page, right_sibling_no, (LeafPage *)right_sibling_frame->data);
     }
     else
-    { // 只能和左兄弟合并
+    {
         BufferFrame *left_sibling_frame = buf_get_frame(space_id, left_sibling_no);
-        leaf_page_merge(space_id, parent_page_no, parent_page, child_index - 1,
-                        left_sibling_no, (LeafPage *)left_sibling_frame->data, child_page_no, child_page);
+        leaf_page_merge(space_id, parent_page_no, parent_page, separator_index_for_left, left_sibling_no, (LeafPage *)left_sibling_frame->data, child_page_no, child_page);
     }
 }
 
@@ -522,93 +491,76 @@ static void internal_page_redistribute(uint32_t space_id, uint32_t parent_page_n
 }
 
 // [新增] 合并两个内节点的实现
-static void internal_page_merge(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, int left_child_index,
+static void internal_page_merge(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, int separator_key_index,
                                 uint32_t left_page_no, InternalPage *left_page,
                                 uint32_t right_page_no, InternalPage *right_page)
 {
-    // 1. 将父节点中分隔二者的“路标”键，拉下来，作为两个节点合并后的“中间键”
-    left_page->entries[left_page->num_entries].key = parent_page->entries[left_child_index].key;
+    // [这个函数的实现是正确的，无需修改]
+    left_page->entries[left_page->num_entries].key = parent_page->entries[separator_key_index].key;
     left_page->entries[left_page->num_entries].child_page_no = right_page->first_child_page_no;
     left_page->num_entries++;
-
-    // 2. 将右节点的所有条目，全部拷贝到左节点的末尾
     memcpy(&left_page->entries[left_page->num_entries], right_page->entries, right_page->num_entries * sizeof(InternalEntry));
     left_page->num_entries += right_page->num_entries;
-
-    // 3. 在父节点中，删除指向右节点的那个“路标”
-    internal_page_delete_entry(space_id, parent_page_no, parent_page, left_child_index);
-
+    internal_page_delete_entry(space_id, parent_page_no, parent_page, separator_key_index);
     buf_mark_dirty(space_id, parent_page_no);
     buf_mark_dirty(space_id, left_page_no);
 }
 
 static void handle_internal_underflow(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, uint32_t child_page_no, int child_index)
 {
+    // 逻辑与 handle_leaf_underflow 完全平行
+    uint32_t left_sibling_no = 0, right_sibling_no = 0;
+    int separator_index_for_left = -1, separator_index_for_right = -1;
+
+    if (child_index == -1)
+    {
+        right_sibling_no = parent_page->entries[0].child_page_no;
+        separator_index_for_right = 0;
+    }
+    else
+    {
+        left_sibling_no = (child_index == 0) ? parent_page->first_child_page_no : parent_page->entries[child_index - 1].child_page_no;
+        separator_index_for_left = child_index;
+        if (child_index < parent_page->num_entries - 1)
+        {
+            right_sibling_no = parent_page->entries[child_index + 1].child_page_no;
+            separator_index_for_right = child_index + 1;
+        }
+    }
+
     BufferFrame *child_frame = buf_get_frame(space_id, child_page_no);
     InternalPage *child_page = (InternalPage *)child_frame->data;
 
-    // --- 寻找兄弟节点 (逻辑与叶子节点处理时完全一致) ---
-    uint32_t left_sibling_no = 0;
-    if (child_index > 0)
-    {
-        left_sibling_no = parent_page->entries[child_index - 1].child_page_no;
-    }
-    else if (child_index == 0)
-    {
-        left_sibling_no = parent_page->first_child_page_no;
-    }
-
-    // 如果 child_index 是 -1 (最左孩子), 它没有严格意义的左兄弟
-    if (child_index == -1)
-    {
-        left_sibling_no = 0;
-    }
-
-    uint32_t right_sibling_no = 0;
-    if (child_index < parent_page->num_entries)
-    {
-        right_sibling_no = (child_index == -1) ? parent_page->entries[0].child_page_no : parent_page->entries[child_index + 1].child_page_no;
-    }
-
-    // --- 决策：优先重分配 ---
-    // 尝试从右兄弟借
     if (right_sibling_no != 0)
     {
         BufferFrame *right_sibling_frame = buf_get_frame(space_id, right_sibling_no);
         InternalPage *right_sibling = (InternalPage *)right_sibling_frame->data;
         if (right_sibling->num_entries > MAX_INTERNAL_ENTRIES / 2)
         {
-            internal_page_redistribute(space_id, parent_page_no, parent_page, child_index,
-                                       child_page_no, child_page, right_sibling_no, right_sibling);
+            internal_page_redistribute(space_id, parent_page_no, parent_page, separator_index_for_right, child_page_no, child_page, right_sibling_no, right_sibling);
             return;
         }
     }
-    // 尝试从左兄弟借
     if (left_sibling_no != 0)
     {
         BufferFrame *left_sibling_frame = buf_get_frame(space_id, left_sibling_no);
         InternalPage *left_sibling = (InternalPage *)left_sibling_frame->data;
         if (left_sibling->num_entries > MAX_INTERNAL_ENTRIES / 2)
         {
-            internal_page_redistribute(space_id, parent_page_no, parent_page, child_index,
-                                       child_page_no, child_page, left_sibling_no, left_sibling);
+            internal_page_redistribute(space_id, parent_page_no, parent_page, separator_index_for_left, child_page_no, child_page, left_sibling_no, left_sibling);
             return;
         }
     }
 
-    // --- 决策：只能合并 ---
     if (right_sibling_no != 0)
     {
-        // 优先和右兄弟合并
         BufferFrame *right_sibling_frame = buf_get_frame(space_id, right_sibling_no);
-        internal_page_merge(space_id, parent_page_no, parent_page, child_index,
-                            child_page_no, child_page, right_sibling_no, (InternalPage *)right_sibling_frame->data);
+        internal_page_merge(space_id, parent_page_no, parent_page, separator_index_for_right, child_page_no, child_page, right_sibling_no, (InternalPage *)right_sibling_frame->data);
     }
     else
-    { // 只能和左兄弟合并
+    {
         BufferFrame *left_sibling_frame = buf_get_frame(space_id, left_sibling_no);
-        internal_page_merge(space_id, parent_page_no, parent_page, child_index - 1,
-                            left_sibling_no, (InternalPage *)left_sibling_frame->data, child_page_no, child_page);
+        internal_page_merge(space_id, parent_page_no, parent_page, separator_index_for_left, left_sibling_no, (InternalPage *)left_sibling_frame->data, child_page_no, child_page);
     }
 }
 

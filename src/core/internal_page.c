@@ -1,4 +1,5 @@
 #include "internal_page.h"
+#include <stdio.h>
 #include "buffer_pool.h"
 #include "b_tree.h"
 #include <string.h>
@@ -251,7 +252,7 @@ int internal_page_insert_or_split(uint32_t space_id, uint32_t page_no, uint32_t 
 
 // [重写] internal_page_get_child_index_by_page
 // 在 b_tree.c 中声明为 static，因为它只在这里被 b_tree_delete_internal 使用
-static int internal_page_get_child_index_by_page(InternalPage *page, uint32_t child_page_no)
+int internal_page_get_child_index_by_page(InternalPage *page, uint32_t child_page_no)
 {
     if (page->first_child_page_no == child_page_no)
     {
