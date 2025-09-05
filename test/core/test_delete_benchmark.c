@@ -21,11 +21,14 @@ int main()
     // --- Phase 1: 插入100万条记录 ---
     const int num_insertions = 1000000;
     printf("--- Phase 1: Inserting %d records ---\n", num_insertions);
-    for (int i = 0; i < num_insertions; i++) {
+    for (int i = 0; i < num_insertions; i++)
+    {
         Row row = {.id = i + 1};
         // 为了加快速度，只在关键节点打印
-        if ((i + 1) % 100000 == 0) printf("... %d records inserted.\n", i + 1);
-        if (b_tree_insert(space_id, &row) != 0) {
+        if ((i + 1) % 100000 == 0)
+            printf("... %d records inserted.\n", i + 1);
+        if (b_tree_insert(space_id, &row) != 0)
+        {
             fprintf(stderr, "Insertion failed at row id %u\n", row.id);
             return -1;
         }
@@ -39,18 +42,21 @@ int main()
     // --- Phase 3: 从 ID=1 开始，连续删除50万条记录 ---
     const int num_deletions = 500000;
     printf("--- Phase 3: Sequentially deleting first %d records ---\n", num_deletions);
-    
+
     // 我们依然需要这个数组，以便在最终验证阶段知道哪些ID被删了
-    int* deleted_flags = (int*)calloc(num_insertions + 1, sizeof(int));
+    int *deleted_flags = (int *)calloc(num_insertions + 1, sizeof(int));
     clock_t start_time = clock();
-    
+
     // [核心修改] 将随机删除循环，改为简单的顺序循环
-    for (int i = 0; i < num_deletions; i++) {
-        if ((i + 1) % 50000 == 0) printf("... %d records deleted.\n", i + 1);
-        
+    for (int i = 0; i < num_deletions; i++)
+    {
+        if ((i + 1) % 50000 == 0)
+            printf("... %d records deleted.\n", i + 1);
+
         uint32_t id_to_delete = i + 1; // 从 1, 2, 3... 开始删除
 
-        if (table_delete_row(space_id, id_to_delete) != 0) {
+        if (table_delete_row(space_id, id_to_delete) != 0)
+        {
             fprintf(stderr, "Deletion failed at row id %u\n", id_to_delete);
             // 在压力测试中，我们可能选择继续而不是直接退出
         }
@@ -69,14 +75,18 @@ int main()
     // --- Phase 5: 最终一致性验证 ---
     // (这部分逻辑无需改变，它能完美地验证顺序删除的结果)
     printf("--- Phase 5: Verifying data consistency ---\n");
-    buf_flush_all(); 
-    buf_init(); 
+    buf_flush_all();
+    buf_init();
 
-    for (int i = 1; i <= num_insertions; i++) {
-        Row* row = b_tree_search(space_id, i);
-        if (deleted_flags[i]) {
+    for (int i = 1; i <= num_insertions; i++)
+    {
+        Row *row = b_tree_search(space_id, i);
+        if (deleted_flags[i])
+        {
             assert(row == NULL); // 确认已删除的 (1 到 500,000)，真的找不到了
-        } else {
+        }
+        else
+        {
             assert(row != NULL && row->id == i); // 确认没删除的 (500,001 到 1,000,000)，一定能找到
         }
     }
