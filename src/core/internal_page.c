@@ -181,6 +181,7 @@ int internal_page_insert(uint32_t space_id, uint32_t page_no, InternalPage *page
 } */
 
 // [最终修复] 这是内节点分裂的完整、健壮、且清理了内存的实现
+// [最终修复] 这是内节点分裂的完整、健壮、且逻辑正确的实现
 int internal_page_insert_or_split(uint32_t space_id, uint32_t page_no, uint32_t key, uint32_t child_page_no, uint32_t *out_split_key, uint32_t *out_new_page_no)
 {
     BufferFrame *frame = buf_get_frame(space_id, page_no);
@@ -188,64 +189,88 @@ int internal_page_insert_or_split(uint32_t space_id, uint32_t page_no, uint32_t 
         return -1;
     InternalPage *page = (InternalPage *)frame->data;
 
+    // 如果页未满，直接插入 (这部分逻辑可以复用，但为了清晰，我们统一处理)
     if (page->num_entries < MAX_INTERNAL_ENTRIES)
     {
         return internal_page_insert(space_id, page_no, page, key, child_page_no);
     }
 
+    // --- 页已满，执行稳健的分裂逻辑 ---
     printf("Internal page %u is full, splitting...\n", page_no);
 
-    InternalEntry temp_entries[MAX_INTERNAL_ENTRIES + 1];
-    int pos = 0;
-    while (pos < MAX_INTERNAL_ENTRIES && page->entries[pos].key < key)
+    // 1. 创建临时的、能容纳所有指针和键的序列
+    uint32_t all_keys[MAX_INTERNAL_ENTRIES + 1];
+    uint32_t all_children[MAX_INTERNAL_ENTRIES + 2];
+
+    // 2. [关键修复] 将旧页的所有指针(包括first_child_page_no)和键拷贝到临时序列
+    all_children[0] = page->first_child_page_no;
+    for (int i = 0; i < page->num_entries; i++)
     {
-        temp_entries[pos] = page->entries[pos];
+        all_keys[i] = page->entries[i].key;
+        all_children[i + 1] = page->entries[i].child_page_no;
+    }
+
+    // 3. 找到新键和新指针的插入位置
+    int pos = 0;
+    while (pos < page->num_entries && all_keys[pos] < key)
+    {
         pos++;
     }
-    temp_entries[pos].key = key;
-    temp_entries[pos].child_page_no = child_page_no;
-    for (int i = pos; i < MAX_INTERNAL_ENTRIES; i++)
+
+    // 4. 在临时序列中插入新键和新指针
+    // 先为新键腾出空间
+    for (int i = page->num_entries; i > pos; i--)
     {
-        temp_entries[i + 1] = page->entries[i];
+        all_keys[i] = all_keys[i - 1];
     }
+    all_keys[pos] = key;
+    // 再为新指针腾出空间
+    for (int i = page->num_entries + 1; i > pos + 1; i--)
+    {
+        all_children[i] = all_children[i - 1];
+    }
+    all_children[pos + 1] = child_page_no;
 
+    // 5. 计算分裂点，并将中间键向上推给父节点
     int mid_idx = (MAX_INTERNAL_ENTRIES + 1) / 2;
-    *out_split_key = temp_entries[mid_idx].key;
+    *out_split_key = all_keys[mid_idx];
 
+    // 6. 分配一个新页用于分裂
     uint32_t new_page_no;
     BufferFrame *new_frame = buf_alloc_frame(space_id, PAGE_TYPE_INTERNAL, &new_page_no);
     if (!new_frame)
         return -1;
     *out_new_page_no = new_page_no;
     InternalPage *new_page = (InternalPage *)new_frame->data;
-
-    BufferFrame *meta_frame = buf_get_frame(space_id, 0);
-    if (meta_frame)
+    // 更新元数据中的总页数
+    BTreeMeta *meta = get_meta(space_id);
+    if (meta)
     {
-        ((BTreeMeta *)meta_frame->data)->total_pages++;
+        meta->total_pages++;
         buf_mark_dirty(space_id, 0);
     }
 
-    // --- 核心修复：清理并填充老页 ---
+    // 7. 用分裂后的前半部分，重写老页
     page->num_entries = mid_idx;
-    memcpy(page->entries, temp_entries, mid_idx * sizeof(InternalEntry));
-    // [新增] 将老页中剩余的“垃圾”空间彻底清零
-    int remaining_space_old = MAX_INTERNAL_ENTRIES - mid_idx;
-    memset(&page->entries[mid_idx], 0, remaining_space_old * sizeof(InternalEntry));
-
-    // --- 核心修复：清理并填充新页 ---
-    new_page->num_entries = MAX_INTERNAL_ENTRIES - mid_idx;
-    new_page->first_child_page_no = temp_entries[mid_idx].child_page_no;
-    memcpy(new_page->entries, &temp_entries[mid_idx + 1], new_page->num_entries * sizeof(InternalEntry));
-    // [新增] 将新页中剩余的“垃圾”空间彻底清零
-    int remaining_space_new = MAX_INTERNAL_ENTRIES - new_page->num_entries;
-    if (remaining_space_new > 0)
+    // 老页的 first_child_page_no 不变, 它就是 all_children[0]
+    for (int i = 0; i < mid_idx; i++)
     {
-        memset(&new_page->entries[new_page->num_entries], 0, remaining_space_new * sizeof(InternalEntry));
+        page->entries[i].key = all_keys[i];
+        page->entries[i].child_page_no = all_children[i + 1];
     }
 
+    // 8. 用分裂后的后半部分，填充新页
+    new_page->num_entries = MAX_INTERNAL_ENTRIES - mid_idx;
+    new_page->first_child_page_no = all_children[mid_idx + 1];
+    for (int i = 0; i < new_page->num_entries; i++)
+    {
+        new_page->entries[i].key = all_keys[mid_idx + 1 + i];
+        new_page->entries[i].child_page_no = all_children[mid_idx + 2 + i];
+    }
+
+    // 9. 标记脏页
     buf_mark_dirty(space_id, page_no);
-    // buf_alloc_frame 已经将新页标记为脏
+    // buf_alloc_frame 已经将新页标记为脏页
 
     return 0;
 }
