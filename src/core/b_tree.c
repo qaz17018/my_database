@@ -14,15 +14,13 @@ static void handle_internal_underflow(uint32_t space_id, uint32_t parent_page_no
 static void leaf_page_redistribute(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, int underflow_child_index,
                                    uint32_t underflow_page_no, LeafPage *underflow_page,
                                    uint32_t donor_page_no, LeafPage *donor_page);
-static void leaf_page_merge(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, int left_child_index,
-                            uint32_t left_page_no, LeafPage *left_page,
-                            uint32_t right_page_no, LeafPage *right_page);
+static void leaf_page_merge(uint32_t space_id, uint32_t parent_page_no,
+                            uint32_t left_page_no, uint32_t right_page_no);
 static void internal_page_redistribute(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, int underflow_child_index,
                                        uint32_t underflow_page_no, InternalPage *underflow_page,
                                        uint32_t donor_page_no, InternalPage *donor_page);
-static void internal_page_merge(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, int left_child_index,
-                                uint32_t left_page_no, InternalPage *left_page,
-                                uint32_t right_page_no, InternalPage *right_page);
+static void internal_page_merge(uint32_t space_id, uint32_t parent_page_no,
+                                uint32_t left_page_no, uint32_t right_page_no);
 
 BTreeMeta *get_meta(uint32_t space_id)
 {
@@ -365,17 +363,24 @@ static void leaf_page_redistribute(uint32_t space_id, uint32_t parent_page_no, I
 }
 
 // [新增] 合并两个叶子节点的实现
-static void leaf_page_merge(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, int separator_key_index,
-                            uint32_t left_page_no, LeafPage *left_page,
-                            uint32_t right_page_no, LeafPage *right_page)
+static void leaf_page_merge(uint32_t space_id, uint32_t parent_page_no,
+                            uint32_t left_page_no, uint32_t right_page_no)
 {
-    // [这个函数的实现是正确的，无需修改]
+    BufferFrame *left_frame = buf_get_frame(space_id, left_page_no);
+    BufferFrame *right_frame = buf_get_frame(space_id, right_page_no);
+    if (!left_frame || !right_frame)
+        return;
+    LeafPage *left_page = (LeafPage *)left_frame->data;
+    LeafPage *right_page = (LeafPage *)right_frame->data;
+
     memcpy(&left_page->records[left_page->num_records], right_page->records, right_page->num_records * sizeof(Row));
     left_page->num_records += right_page->num_records;
     left_page->next_leaf = right_page->next_leaf;
-    internal_page_delete_entry(space_id, parent_page_no, parent_page, separator_key_index);
-    buf_mark_dirty(space_id, parent_page_no);
+
     buf_mark_dirty(space_id, left_page_no);
+
+    // [核心] 调用新的、按值（子页号）删除的函数
+    remove_entry_from_parent(space_id, parent_page_no, right_page_no);
 }
 
 // --- 叶子节点欠载处理 ---
@@ -432,12 +437,12 @@ static void handle_leaf_underflow(uint32_t space_id, uint32_t parent_page_no, In
     if (right_sibling_no != 0)
     {
         BufferFrame *right_sibling_frame = buf_get_frame(space_id, right_sibling_no);
-        leaf_page_merge(space_id, parent_page_no, parent_page, separator_index_for_right, child_page_no, child_page, right_sibling_no, (LeafPage *)right_sibling_frame->data);
+        leaf_page_merge(space_id, parent_page_no, child_page_no, right_sibling_no);
     }
     else
     {
         BufferFrame *left_sibling_frame = buf_get_frame(space_id, left_sibling_no);
-        leaf_page_merge(space_id, parent_page_no, parent_page, separator_index_for_left, left_sibling_no, (LeafPage *)left_sibling_frame->data, child_page_no, child_page);
+        leaf_page_merge(space_id, parent_page_no, left_sibling_no, child_page_no);
     }
 }
 
@@ -491,19 +496,37 @@ static void internal_page_redistribute(uint32_t space_id, uint32_t parent_page_n
 }
 
 // [新增] 合并两个内节点的实现
-static void internal_page_merge(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, int separator_key_index,
-                                uint32_t left_page_no, InternalPage *left_page,
-                                uint32_t right_page_no, InternalPage *right_page)
+static void internal_page_merge(uint32_t space_id, uint32_t parent_page_no,
+                                uint32_t left_page_no, uint32_t right_page_no)
 {
-    // [这个函数的实现是正确的，无需修改]
+    // [指针安全] 在操作前，获取所有需要的、最新的指针
+    BufferFrame *parent_frame = buf_get_frame(space_id, parent_page_no);
+    BufferFrame *left_frame = buf_get_frame(space_id, left_page_no);
+    BufferFrame *right_frame = buf_get_frame(space_id, right_page_no);
+    if (!parent_frame || !left_frame || !right_frame)
+        return;
+
+    InternalPage *parent_page = (InternalPage *)parent_frame->data;
+    InternalPage *left_page = (InternalPage *)left_frame->data;
+    InternalPage *right_page = (InternalPage *)right_frame->data;
+
+    // 找到分隔键的索引
+    int separator_key_index = internal_page_get_child_index_by_page(parent_page, right_page_no);
+    if (separator_key_index == -2)
+        return; // 安全检查
+
+    // 从父节点拉下分隔键
     left_page->entries[left_page->num_entries].key = parent_page->entries[separator_key_index].key;
     left_page->entries[left_page->num_entries].child_page_no = right_page->first_child_page_no;
     left_page->num_entries++;
+
     memcpy(&left_page->entries[left_page->num_entries], right_page->entries, right_page->num_entries * sizeof(InternalEntry));
     left_page->num_entries += right_page->num_entries;
-    internal_page_delete_entry(space_id, parent_page_no, parent_page, separator_key_index);
-    buf_mark_dirty(space_id, parent_page_no);
+
     buf_mark_dirty(space_id, left_page_no);
+
+    // [核心] 调用新的、按值（子页号）删除的函数
+    remove_entry_from_parent(space_id, parent_page_no, right_page_no);
 }
 
 static void handle_internal_underflow(uint32_t space_id, uint32_t parent_page_no, InternalPage *parent_page, uint32_t child_page_no, int child_index)
@@ -555,12 +578,11 @@ static void handle_internal_underflow(uint32_t space_id, uint32_t parent_page_no
     if (right_sibling_no != 0)
     {
         BufferFrame *right_sibling_frame = buf_get_frame(space_id, right_sibling_no);
-        internal_page_merge(space_id, parent_page_no, parent_page, separator_index_for_right, child_page_no, child_page, right_sibling_no, (InternalPage *)right_sibling_frame->data);
+        internal_page_merge(space_id, parent_page_no, child_page_no, right_sibling_no);
     }
     else
     {
-        BufferFrame *left_sibling_frame = buf_get_frame(space_id, left_sibling_no);
-        internal_page_merge(space_id, parent_page_no, parent_page, separator_index_for_left, left_sibling_no, (InternalPage *)left_sibling_frame->data, child_page_no, child_page);
+        internal_page_merge(space_id, parent_page_no, left_sibling_no, child_page_no);
     }
 }
 

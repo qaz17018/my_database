@@ -47,4 +47,6 @@ int internal_page_get_child_index_by_page(InternalPage *page, uint32_t child_pag
 // [新增] 声明从内节点删除条目的函数
 void internal_page_delete_entry(uint32_t space_id, uint32_t page_no, InternalPage *page, int entry_index);
 
+void remove_entry_from_parent(uint32_t space_id, uint32_t parent_page_no, uint32_t child_page_no_to_remove);
+
 #endif

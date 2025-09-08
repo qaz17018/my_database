@@ -268,6 +268,30 @@ int internal_page_get_child_index_by_page(InternalPage *page, uint32_t child_pag
     return -2;
 }
 
+// [最终修复] 用一个全新的、“按键删除”的函数，替换掉旧的 internal_page_delete_entry
+void remove_entry_from_parent(uint32_t space_id, uint32_t parent_page_no, uint32_t child_page_no_to_remove)
+{
+    BufferFrame *parent_frame = buf_get_frame(space_id, parent_page_no);
+    if (!parent_frame)
+        return;
+    InternalPage *parent_page = (InternalPage *)parent_frame->data;
+
+    int entry_index = -1;
+    for (int i = 0; i < parent_page->num_entries; i++)
+    {
+        if (parent_page->entries[i].child_page_no == child_page_no_to_remove)
+        {
+            entry_index = i;
+            break;
+        }
+    }
+
+    if (entry_index != -1)
+    {
+        internal_page_delete_entry(space_id, parent_page_no, parent_page, entry_index);
+    }
+}
+
 // [新增] 从内节点中删除一个条目
 void internal_page_delete_entry(uint32_t space_id, uint32_t page_no, InternalPage *page, int entry_index)
 {
