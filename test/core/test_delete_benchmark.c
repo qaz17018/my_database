@@ -19,7 +19,7 @@ int main()
     buf_init();
 
     // --- Phase 1: 插入100万条记录 ---
-    const int num_insertions = 1000000;
+    const int num_insertions = 3000000;
     printf("--- Phase 1: Inserting %d records ---\n", num_insertions);
     for (int i = 0; i < num_insertions; i++)
     {
@@ -40,7 +40,7 @@ int main()
     b_tree_print_stats(space_id);
 
     // --- Phase 3: 从 ID=1 开始，连续删除50万条记录 ---
-    const int num_deletions = 500000;
+    const int num_deletions = 1300000;
     printf("--- Phase 3: Sequentially deleting first %d records ---\n", num_deletions);
 
     // 我们依然需要这个数组，以便在最终验证阶段知道哪些ID被删了
@@ -52,14 +52,13 @@ int main()
     {
         if ((i + 1) % 50000 == 0)
             printf("... %d records deleted.\n", i + 1);
-
-        uint32_t id_to_delete = i + 1; // 从 1, 2, 3... 开始删除
-
-        if (table_delete_row(space_id, id_to_delete) != 0)
+        uint32_t id_to_delete;
+        do
         {
-            fprintf(stderr, "Deletion failed at row id %u\n", id_to_delete);
-            // 在压力测试中，我们可能选择继续而不是直接退出
-        }
+            id_to_delete = (rand() % num_insertions) + 1;
+        } while (deleted_flags[id_to_delete]); // 如果已经删了，就再找一个
+
+        table_delete_row(space_id, id_to_delete);
         deleted_flags[id_to_delete] = 1;
     }
 

@@ -332,7 +332,7 @@ static void leaf_page_redistribute(uint32_t space_id, uint32_t parent_page_no, I
 
         // 4. [关键] 更新父节点中，指向右兄弟的那个“路标”键
         // 新的路标键，就是右兄弟移动后的新“最小键”
-        parent_page->entries[underflow_child_index + 1].key = donor_page->records[0].id;
+        parent_page->entries[underflow_child_index].key = donor_page->records[0].id;
     }
     // 如果 donor_page 是左兄弟
     else
@@ -455,12 +455,12 @@ static void internal_page_redistribute(uint32_t space_id, uint32_t parent_page_n
     if (underflow_page->first_child_page_no < donor_page->first_child_page_no)
     { // 简化的左右判断
         // 1. 将父节点中分隔二者的“路标”键，拉下来到欠载节点的末尾
-        underflow_page->entries[underflow_page->num_entries].key = parent_page->entries[underflow_child_index + 1].key;
+        underflow_page->entries[underflow_page->num_entries].key = parent_page->entries[underflow_child_index].key;
         underflow_page->entries[underflow_page->num_entries].child_page_no = donor_page->first_child_page_no;
         underflow_page->num_entries++;
 
         // 2. 将右兄弟的第一个“路标”键，推上去替换父节点中被拉下来的键
-        parent_page->entries[underflow_child_index + 1].key = donor_page->entries[0].key;
+        parent_page->entries[underflow_child_index].key = donor_page->entries[0].key;
 
         // 3. 更新右兄弟的内容
         donor_page->first_child_page_no = donor_page->entries[0].child_page_no;
