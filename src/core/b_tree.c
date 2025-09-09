@@ -673,3 +673,65 @@ int table_delete_row(uint32_t space_id, uint32_t id_to_delete)
     }
     return 0;
 }
+
+int table_update_row(uint32_t space_id, const Row *new_row)
+{
+    // 1. 首先，我们需要找到包含旧数据的那个叶子页
+    uint32_t leaf_page_no = b_tree_find_leaf_page(space_id, new_row->id);
+    if (leaf_page_no == 0)
+    {
+        printf("Error: Row with id %u not found for update.\n", new_row->id);
+        return -1; // 记录不存在
+    }
+
+    BufferFrame *frame = buf_get_frame(space_id, leaf_page_no);
+    if (!frame)
+        return -1;
+    LeafPage *page = (LeafPage *)frame->data;
+
+    // 在叶子页中找到旧的 Row
+    int record_index = -1;
+    for (int i = 0; i < page->num_records; i++)
+    {
+        if (page->records[i].id == new_row->id)
+        {
+            record_index = i;
+            break;
+        }
+    }
+
+    if (record_index == -1)
+    {
+        return -1; // 在页内未找到
+    }
+
+    // --- 关键操作：同步更新辅助索引 ---
+    // 检查 username 是否被修改
+    if (strcmp(page->records[record_index].username, new_row->username) != 0)
+    {
+        // 如果变了，我们需要先删除旧的辅助索引条目，再插入新的
+
+        // a. 删除旧的辅助索引条目 (TODO: 我们还没有实现辅助索引的删除！)
+        // secondary_b_tree_delete(space_id, page->records[record_index].username);
+        printf("WARN: Secondary index delete not implemented. Index may be inconsistent.\n");
+
+        // b. 插入新的辅助索引条目
+        SecondaryLeafEntry new_secondary_entry;
+        strncpy(new_secondary_entry.key, new_row->username, USERNAME_MAX_LEN);
+        new_secondary_entry.primary_key = new_row->id;
+        if (secondary_b_tree_insert(space_id, &new_secondary_entry) != 0)
+        {
+            printf("Error: Failed to insert new secondary index entry for update.\n");
+            // 真实数据库需要回滚
+            return -1;
+        }
+    }
+
+    // 2. 直接在主B+树的叶子页上，用新数据覆盖旧数据
+    page->records[record_index] = *new_row;
+
+    // 3. 将页面标记为“脏”
+    buf_mark_dirty(space_id, leaf_page_no);
+
+    return 0; // 更新成功
+}

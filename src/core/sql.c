@@ -97,6 +97,30 @@ static PrepareResult prepare_delete(char *input, Statement *statement)
     return PREPARE_SUCCESS;
 }
 
+static PrepareResult prepare_update(char *input, Statement *statement)
+{
+    statement->type = STATEMENT_UPDATE;
+
+    // 分解命令: "update users set username = '%[^']', email = '%[^']' where id = %d"
+    // 我们使用 sscanf 的强大模式匹配能力
+    int args_assigned = sscanf(input, "update users set username = '%[^']', email = '%[^']' where id = %d",
+                               statement->params.update_statement.new_row_data.username,
+                               statement->params.update_statement.new_row_data.email,
+                               &statement->params.update_statement.id_to_update);
+
+    // sscanf 会返回成功匹配并赋值的参数数量
+    if (args_assigned != 3)
+    {
+        // 如果不等于3，说明输入的格式不完全匹配，是语法错误
+        return PREPARE_SYNTAX_ERROR;
+    }
+
+    // 将解析出的id也存入new_row_data中，方便后续统一处理
+    statement->params.update_statement.new_row_data.id = statement->params.update_statement.id_to_update;
+
+    return PREPARE_SUCCESS;
+}
+
 // “前端”主函数：prepare_statement
 PrepareResult prepare_statement(char *input, Statement *statement)
 {
@@ -115,6 +139,12 @@ PrepareResult prepare_statement(char *input, Statement *statement)
     if (strncmp(input, "delete", 6) == 0)
     {
         return prepare_delete(input, statement);
+    }
+
+    // [新增] 识别 update 命令
+    if (strncmp(input, "update", 6) == 0)
+    {
+        return prepare_update(input, statement);
     }
 
     return PREPARE_UNRECOGNIZED_STATEMENT;
@@ -197,6 +227,21 @@ void execute_statement(uint32_t space_id, Statement *statement)
         else
         {
             printf("Error: Failed to execute delete statement (row with id %d not found?).\n", id);
+        }
+    }
+    break;
+
+    case STATEMENT_UPDATE:
+    {
+        printf("Executing UPDATE for id %u\n", statement->params.update_statement.id_to_update);
+
+        if (table_update_row(space_id, &statement->params.update_statement.new_row_data) == 0)
+        {
+            printf("Executed.\n");
+        }
+        else
+        {
+            printf("Error: Failed to execute update statement.\n");
         }
     }
     break;

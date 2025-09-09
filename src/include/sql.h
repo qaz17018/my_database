@@ -7,7 +7,8 @@ typedef enum
 {
     STATEMENT_INSERT,
     STATEMENT_SELECT,
-    STATEMENT_DELETE
+    STATEMENT_DELETE,
+    STATEMENT_UPDATE
 } StatementType;
 
 // [新增] 定义 WHERE 子句的类型
@@ -42,6 +43,12 @@ typedef struct
         {
             uint32_t id_to_delete;
         } delete_statement;
+
+        struct
+        {
+            uint32_t id_to_update;
+            Row new_row_data; // 用一个 Row 结构来携带所有新数据
+        } update_statement;
 
     } params;
 } Statement;
