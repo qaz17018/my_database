@@ -19,7 +19,7 @@ int main()
     buf_init();
 
     // --- Phase 1: 插入100万条记录 ---
-    const int num_insertions = 3000000;
+    const int num_insertions = 4000000;
     printf("--- Phase 1: Inserting %d records ---\n", num_insertions);
     for (int i = 0; i < num_insertions; i++)
     {
@@ -40,7 +40,7 @@ int main()
     b_tree_print_stats(space_id);
 
     // --- Phase 3: 从 ID=1 开始，连续删除50万条记录 ---
-    const int num_deletions = 1300000;
+    const int num_deletions = 1500000;
     printf("--- Phase 3: Sequentially deleting first %d records ---\n", num_deletions);
 
     // 我们依然需要这个数组，以便在最终验证阶段知道哪些ID被删了

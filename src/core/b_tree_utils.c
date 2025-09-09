@@ -34,13 +34,18 @@ static void b_tree_traverse_for_stats(uint32_t space_id, uint32_t page_no, uint3
     if (frame->page_type == PAGE_TYPE_INTERNAL)
     {
         stats->internal_node_count++;
-        InternalPage *page = (InternalPage *)frame->data;
 
-        // 递归遍历所有子节点
-        b_tree_traverse_for_stats(space_id, page->first_child_page_no, current_depth + 1, stats);
-        for (int i = 0; i < page->num_entries; i++)
+        // --- 核心修复 ---
+        // 1. 在栈上创建一个 page 的安全副本
+        InternalPage page_copy;
+        memcpy(&page_copy, frame->data, sizeof(InternalPage));
+        // -----------------
+
+        // 2. 后续的所有操作，都使用这个绝对安全的 page_copy
+        b_tree_traverse_for_stats(space_id, page_copy.first_child_page_no, current_depth + 1, stats);
+        for (int i = 0; i < page_copy.num_entries; i++)
         {
-            b_tree_traverse_for_stats(space_id, page->entries[i].child_page_no, current_depth + 1, stats);
+            b_tree_traverse_for_stats(space_id, page_copy.entries[i].child_page_no, current_depth + 1, stats);
         }
     }
 }
