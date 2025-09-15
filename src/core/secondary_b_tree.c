@@ -8,6 +8,12 @@
 static int secondary_b_tree_insert_internal(uint32_t space_id, uint32_t page_no, const SecondaryLeafEntry *entry,
                                             char *out_split_key, uint32_t *out_new_page_no);
 
+static int secondary_b_tree_delete_internal(uint32_t space_id, uint32_t parent_page_no, uint32_t current_page_no, const char *key, uint32_t primary_key);
+static void handle_secondary_underflow(uint32_t space_id, uint32_t parent_page_no, uint32_t child_page_no);
+static void secondary_leaf_page_rebalance(uint32_t space_id, uint32_t parent_page_no, uint32_t left_no, uint32_t right_no);
+static void secondary_leaf_page_merge(uint32_t space_id, uint32_t parent_page_no, uint32_t left_no, uint32_t right_no);
+static void secondary_internal_page_delete_entry(uint32_t space_id, uint32_t page_no, SecondaryInternalPage *page, int entry_index);
+
 // (这个文件的其余函数是为了辅助索引服务的，逻辑与b_tree.c类似，但使用字符串比较)
 
 // [最终修复] 这是辅助索引内节点分裂的终极、完整、且逻辑正确的实现
@@ -296,4 +302,199 @@ static uint32_t secondary_b_tree_search_internal(uint32_t space_id, uint32_t pag
     }
 
     return 0; // 未知页面类型或未找到
+}
+
+static void remove_child_entry_from_parent_secondary(uint32_t space_id, uint32_t parent_page_no, uint32_t child_page_no)
+{
+    BufferFrame *parent_frame = buf_get_frame(space_id, parent_page_no);
+    if (!parent_frame)
+        return;
+    SecondaryInternalPage *parent_page = (SecondaryInternalPage *)parent_frame->data;
+
+    int entry_index = -1;
+    // 使用 internal_page_get_child_index_by_page 的逻辑，但适配 secondary internal page
+    if (parent_page->first_child_page_no == child_page_no)
+    {
+        entry_index = -1; // Should not happen for a merge target
+    }
+    else
+    {
+        for (int i = 0; i < parent_page->num_entries; i++)
+        {
+            if (parent_page->entries[i].child_page_no == child_page_no)
+            {
+                entry_index = i;
+                break;
+            }
+        }
+    }
+
+    if (entry_index != -1)
+    {
+        secondary_internal_page_delete_entry(space_id, parent_page_no, parent_page, entry_index);
+    }
+}
+
+static int secondary_b_tree_delete_internal(uint32_t space_id, uint32_t parent_page_no, uint32_t current_page_no, const char *key, uint32_t primary_key)
+{
+    if (current_page_no == 0)
+        return -1;
+    BufferFrame *frame = buf_get_frame(space_id, current_page_no);
+    if (!frame)
+        return -1;
+
+    if (frame->page_type == PAGE_TYPE_SECONDARY_LEAF)
+    {
+        return secondary_leaf_page_delete(space_id, current_page_no, (SecondaryLeafPage *)frame->data, key, primary_key);
+    }
+
+    if (frame->page_type == PAGE_TYPE_SECONDARY_INTERNAL)
+    {
+        SecondaryInternalPage *page = (SecondaryInternalPage *)frame->data;
+        uint32_t child_page_no = secondary_internal_page_get_child(page, key);
+
+        if (secondary_b_tree_delete_internal(space_id, current_page_no, child_page_no, key, primary_key) != 0)
+        {
+            return -1;
+        }
+
+        BufferFrame *child_frame = buf_get_frame(space_id, child_page_no);
+        if (!child_frame)
+            return -1;
+
+        int underflow = 0;
+        if (child_frame->page_type == PAGE_TYPE_SECONDARY_LEAF)
+        {
+            if (((SecondaryLeafPage *)child_frame->data)->num_entries < MAX_SECONDARY_LEAF_ENTRIES / 2)
+                underflow = 1;
+        }
+        else
+        {
+            if (((SecondaryInternalPage *)child_frame->data)->num_entries < MAX_SECONDARY_INTERNAL_ENTRIES / 2)
+                underflow = 1;
+        }
+
+        if (underflow)
+        {
+            handle_secondary_underflow(space_id, current_page_no, child_page_no);
+        }
+        return 0;
+    }
+    return -1;
+}
+
+int secondary_b_tree_delete(uint32_t space_id, const char *key, uint32_t primary_key)
+{
+    BTreeMeta *meta = get_meta(space_id);
+    if (!meta || meta->username_idx_root_page_no == 0)
+        return -1;
+
+    if (secondary_b_tree_delete_internal(space_id, 0, meta->username_idx_root_page_no, key, primary_key) != 0)
+    {
+        return -1;
+    }
+
+    // 检查根节点收缩
+    meta = get_meta(space_id);
+    uint32_t root_page_no = meta->username_idx_root_page_no;
+    BufferFrame *root_frame = buf_get_frame(space_id, root_page_no);
+    if (root_frame && root_frame->page_type == PAGE_TYPE_SECONDARY_INTERNAL && ((SecondaryInternalPage *)root_frame->data)->num_entries == 0)
+    {
+        meta->username_idx_root_page_no = ((SecondaryInternalPage *)root_frame->data)->first_child_page_no;
+        buf_mark_dirty(space_id, 0);
+    }
+    return 0;
+}
+
+static void secondary_internal_page_delete_entry(uint32_t space_id, uint32_t page_no, SecondaryInternalPage *page, int entry_index)
+{
+    if (entry_index < 0 || entry_index >= page->num_entries)
+        return;
+    for (int i = entry_index; i < page->num_entries - 1; i++)
+    {
+        page->entries[i] = page->entries[i + 1];
+    }
+    page->num_entries--;
+    buf_mark_dirty(space_id, page_no);
+}
+
+static void secondary_leaf_page_merge(uint32_t space_id, uint32_t parent_page_no, uint32_t left_no, uint32_t right_no)
+{
+    BufferFrame *left_frame = buf_get_frame(space_id, left_no);
+    BufferFrame *right_frame = buf_get_frame(space_id, right_no);
+    if (!left_frame || !right_frame)
+        return;
+    SecondaryLeafPage *left_page = (SecondaryLeafPage *)left_frame->data;
+    SecondaryLeafPage *right_page = (SecondaryLeafPage *)right_frame->data;
+
+    memcpy(&left_page->entries[left_page->num_entries], right_page->entries, right_page->num_entries * sizeof(SecondaryLeafEntry));
+    left_page->num_entries += right_page->num_entries;
+    left_page->next_leaf = right_page->next_leaf;
+
+    buf_mark_dirty(space_id, left_no);
+    remove_child_entry_from_parent_secondary(space_id, parent_page_no, right_no);
+}
+
+static void secondary_leaf_page_rebalance(uint32_t space_id, uint32_t parent_page_no, uint32_t left_no, uint32_t right_no)
+{
+    BufferFrame *parent_frame = buf_get_frame(space_id, parent_page_no);
+    BufferFrame *left_frame = buf_get_frame(space_id, left_no);
+    BufferFrame *right_frame = buf_get_frame(space_id, right_no);
+    if (!parent_frame || !left_frame || !right_frame)
+        return;
+    SecondaryInternalPage *parent_page = (SecondaryInternalPage *)parent_frame->data;
+    SecondaryLeafPage *left_page = (SecondaryLeafPage *)left_frame->data;
+    SecondaryLeafPage *right_page = (SecondaryLeafPage *)right_frame->data;
+
+    int separator_index = -1; //
+    for (int i = 0; i < parent_page->num_entries; ++i)
+    {
+        if (parent_page->entries[i].child_page_no == right_no)
+        {
+            separator_index = i;
+            break;
+        }
+    }
+    if (separator_index == -1)
+        return;
+
+    if (left_page->num_entries < right_page->num_entries)
+    {
+        SecondaryLeafEntry entry_to_move = right_page->entries[0];
+        secondary_leaf_page_insert(space_id, left_no, left_page, &entry_to_move);
+        secondary_leaf_page_delete(space_id, right_no, right_page, entry_to_move.key, entry_to_move.primary_key);
+        strcpy(parent_page->entries[separator_index].key, right_page->entries[0].key);
+    }
+    else
+    {
+        SecondaryLeafEntry entry_to_move = left_page->entries[left_page->num_entries - 1];
+        secondary_leaf_page_delete(space_id, left_no, left_page, entry_to_move.key, entry_to_move.primary_key);
+        secondary_leaf_page_insert(space_id, right_no, right_page, &entry_to_move);
+        strcpy(parent_page->entries[separator_index].key, right_page->entries[0].key);
+    }
+    buf_mark_dirty(space_id, parent_page_no);
+}
+
+// [新增] 辅助索引欠载处理调度
+static void handle_secondary_underflow(uint32_t space_id, uint32_t parent_page_no, uint32_t child_page_no)
+{
+    if (parent_page_no == 0)
+        return; // 根节点不处理
+
+    BufferFrame *parent_frame = buf_get_frame(space_id, parent_page_no);
+    if (!parent_frame)
+        return;
+    SecondaryInternalPage *parent_page = (SecondaryInternalPage *)parent_frame->data;
+
+    // TODO: 实现健壮的兄弟查找逻辑 (复刻 b_tree.c 中的 handle_underflow)
+
+    BufferFrame *child_frame = buf_get_frame(space_id, child_page_no);
+    if (child_frame->page_type == PAGE_TYPE_SECONDARY_LEAF)
+    {
+        // TODO: 根据兄弟节点的饱满度，决定调用 merge 还是 rebalance
+    }
+    else
+    { // Internal Page
+      // TODO: 处理内节点的欠载
+    }
 }

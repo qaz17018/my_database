@@ -51,4 +51,6 @@ uint32_t secondary_leaf_page_search(SecondaryLeafPage *page, const char *key);
 
 uint32_t secondary_internal_page_get_child(SecondaryInternalPage *page, const char *key);
 
+int secondary_leaf_page_delete(uint32_t space_id, uint32_t page_no, SecondaryLeafPage *page, const char *key, uint32_t primary_key);
+
 #endif

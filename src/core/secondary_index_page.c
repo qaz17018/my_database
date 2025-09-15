@@ -104,3 +104,32 @@ uint32_t secondary_internal_page_get_child(SecondaryInternalPage *page, const ch
         return page->entries[target_idx].child_page_no;
     }
 }
+
+// [新增] 从辅助索引叶子页中删除一条记录
+int secondary_leaf_page_delete(uint32_t space_id, uint32_t page_no, SecondaryLeafPage *page, const char *key, uint32_t primary_key)
+{
+    int pos = -1;
+    // 线性查找，因为键可能重复
+    for (int i = 0; i < page->num_entries; i++)
+    {
+        if (strcmp(page->entries[i].key, key) == 0 && page->entries[i].primary_key == primary_key)
+        {
+            pos = i;
+            break;
+        }
+    }
+
+    if (pos == -1)
+    {
+        return -1; // 未找到
+    }
+
+    // 左移覆盖
+    for (int i = pos; i < page->num_entries - 1; i++)
+    {
+        page->entries[i] = page->entries[i + 1];
+    }
+    page->num_entries--;
+    buf_mark_dirty(space_id, page_no);
+    return 0; // 成功
+}

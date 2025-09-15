@@ -189,88 +189,103 @@ int internal_page_insert_or_split(uint32_t space_id, uint32_t page_no, uint32_t 
         return -1;
     InternalPage *page = (InternalPage *)frame->data;
 
-    // 如果页未满，直接插入 (这部分逻辑可以复用，但为了清晰，我们统一处理)
     if (page->num_entries < MAX_INTERNAL_ENTRIES)
     {
+        // 頁未滿，直接調用原有的插入函數即可
         return internal_page_insert(space_id, page_no, page, key, child_page_no);
     }
 
-    // --- 页已满，执行稳健的分裂逻辑 ---
+    // --- 頁已滿，執行穩健的分裂邏輯 ---
     printf("Internal page %u is full, splitting...\n", page_no);
 
-    // 1. 创建临时的、能容纳所有指针和键的序列
+    // 1. [關鍵] 創建臨时的、分離的鍵數組和指針數組
+    // 指針比鍵多一個，這非常重要！
     uint32_t all_keys[MAX_INTERNAL_ENTRIES + 1];
     uint32_t all_children[MAX_INTERNAL_ENTRIES + 2];
 
-    // 2. [关键修复] 将旧页的所有指针(包括first_child_page_no)和键拷贝到临时序列
+    // 2. [關鍵] 首先將 first_child_page_no 拷貝到新數組的第一個位置
     all_children[0] = page->first_child_page_no;
+    // 然後再拷貝 entries 數組中的所有鍵和指針
     for (int i = 0; i < page->num_entries; i++)
     {
         all_keys[i] = page->entries[i].key;
         all_children[i + 1] = page->entries[i].child_page_no;
     }
 
-    // 3. 找到新键和新指针的插入位置
+    // 3. 找到新鍵和新指針應該插入的位置
     int pos = 0;
     while (pos < page->num_entries && all_keys[pos] < key)
     {
         pos++;
     }
 
-    // 4. 在临时序列中插入新键和新指针
-    // 先为新键腾出空间
+    // 4. 在臨時序列中，為新鍵和新指針騰出空間
     for (int i = page->num_entries; i > pos; i--)
     {
         all_keys[i] = all_keys[i - 1];
     }
-    all_keys[pos] = key;
-    // 再为新指针腾出空间
     for (int i = page->num_entries + 1; i > pos + 1; i--)
     {
         all_children[i] = all_children[i - 1];
     }
+
+    // 5. 插入新鍵和新指針
+    all_keys[pos] = key;
     all_children[pos + 1] = child_page_no;
 
-    // 5. 计算分裂点，并将中间键向上推给父节点
+    // 6. 計算分裂點，並將中間鍵向上推給父節點
     int mid_idx = (MAX_INTERNAL_ENTRIES + 1) / 2;
     *out_split_key = all_keys[mid_idx];
 
-    // 6. 分配一个新页用于分裂
+    // 7. 分配一個新頁用於分裂
     uint32_t new_page_no;
     BufferFrame *new_frame = buf_alloc_frame(space_id, PAGE_TYPE_INTERNAL, &new_page_no);
     if (!new_frame)
         return -1;
     *out_new_page_no = new_page_no;
     InternalPage *new_page = (InternalPage *)new_frame->data;
-    // 更新元数据中的总页数
-    BTreeMeta *meta = get_meta(space_id);
-    if (meta)
+
+    // 更新元數據中的總頁數
+    BufferFrame *meta_frame = buf_get_frame(space_id, 0);
+    if (meta_frame)
     {
-        meta->total_pages++;
+        ((BTreeMeta *)meta_frame->data)->total_pages++;
         buf_mark_dirty(space_id, 0);
     }
 
-    // 7. 用分裂后的前半部分，重写老页
+    // --- 核心邏輯：用分裂後的前半部分重寫老頁 ---
     page->num_entries = mid_idx;
-    // 老页的 first_child_page_no 不变, 它就是 all_children[0]
+    // 老頁的 first_child_page_no 維持不變, 它就是 all_children[0]
     for (int i = 0; i < mid_idx; i++)
     {
         page->entries[i].key = all_keys[i];
         page->entries[i].child_page_no = all_children[i + 1];
     }
+    // 將老頁中剩餘的“垃圾”空間徹底清零，增加穩健性
+    int remaining_space_old = MAX_INTERNAL_ENTRIES - mid_idx;
+    if (remaining_space_old > 0)
+    {
+        memset(&page->entries[mid_idx], 0, remaining_space_old * sizeof(InternalEntry));
+    }
 
-    // 8. 用分裂后的后半部分，填充新页
+    // --- 核心邏輯：用分裂後的後半部分填充新頁 ---
     new_page->num_entries = MAX_INTERNAL_ENTRIES - mid_idx;
-    new_page->first_child_page_no = all_children[mid_idx + 1];
+    new_page->first_child_page_no = all_children[mid_idx + 1]; // [關鍵] 新頁的第一个指针，是分裂點之後的那個指針
     for (int i = 0; i < new_page->num_entries; i++)
     {
         new_page->entries[i].key = all_keys[mid_idx + 1 + i];
         new_page->entries[i].child_page_no = all_children[mid_idx + 2 + i];
     }
+    // 將新頁中剩餘的“垃圾”空間徹底清零
+    int remaining_space_new = MAX_INTERNAL_ENTRIES - new_page->num_entries;
+    if (remaining_space_new > 0)
+    {
+        memset(&new_page->entries[new_page->num_entries], 0, remaining_space_new * sizeof(InternalEntry));
+    }
 
-    // 9. 标记脏页
+    // 9. 標記髒頁
     buf_mark_dirty(space_id, page_no);
-    // buf_alloc_frame 已经将新页标记为脏页
+    // buf_alloc_frame 已經將新頁標記為髒頁
 
     return 0;
 }

@@ -9,4 +9,7 @@
 uint32_t secondary_b_tree_search(uint32_t space_id, const char *key);
 int secondary_b_tree_insert(uint32_t space_id, const SecondaryLeafEntry *entry);
 
+// [新增] 声明辅助索引的顶层删除函数
+int secondary_b_tree_delete(uint32_t space_id, const char *key, uint32_t primary_key);
+
 #endif
