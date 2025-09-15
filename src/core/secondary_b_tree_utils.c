@@ -33,12 +33,18 @@ static void secondary_b_tree_traverse_for_stats(uint32_t space_id, uint32_t page
     if (frame->page_type == PAGE_TYPE_SECONDARY_INTERNAL)
     {
         stats->internal_node_count++;
-        SecondaryInternalPage *page = (SecondaryInternalPage *)frame->data;
 
-        secondary_b_tree_traverse_for_stats(space_id, page->first_child_page_no, current_depth + 1, stats);
-        for (int i = 0; i < page->num_entries; i++)
+        // --- [核心修复] 完全复刻 b_tree_utils.c 的安全模式 ---
+        // 1. 在栈上创建一个 page 的安全副本
+        SecondaryInternalPage page_copy;
+        memcpy(&page_copy, frame->data, sizeof(SecondaryInternalPage));
+        // ----------------------------------------------------
+
+        // 2. 后续的所有操作，都使用这个绝对安全的 page_copy
+        secondary_b_tree_traverse_for_stats(space_id, page_copy.first_child_page_no, current_depth + 1, stats);
+        for (int i = 0; i < page_copy.num_entries; i++)
         {
-            secondary_b_tree_traverse_for_stats(space_id, page->entries[i].child_page_no, current_depth + 1, stats);
+            secondary_b_tree_traverse_for_stats(space_id, page_copy.entries[i].child_page_no, current_depth + 1, stats);
         }
     }
 }

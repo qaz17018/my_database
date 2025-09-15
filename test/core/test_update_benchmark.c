@@ -6,6 +6,9 @@
 #include "buffer_pool.h"
 #include "b_tree.h"
 #include "row.h"
+#include "b_tree_utils.h"
+#include "secondary_b_tree.h"       // [新增] 需要引入它来获取 secondary_b_tree_delete 的声明
+#include "secondary_b_tree_utils.h" // 引入辅助索引的健康巡检工具
 
 int main()
 {
@@ -42,10 +45,10 @@ int main()
     // --- Phase 2: 更新前的健康检查 ---
     printf("--- Phase 2: Health Check Before Updates ---\n");
     b_tree_print_stats(space_id);           // 主B+树体检
-    secondary_b_tree_print_stats(space_id); // [新增] 辅助索引体检
+    secondary_b_tree_print_stats(space_id); // 辅助索引体检
 
     // --- Phase 3: 更新全部200万条记录的username ---
-    printf("--- Phase 2: Updating all %d records ---\n", num_records);
+    printf("--- Phase 3: Updating all %d records ---\n", num_records);
     start_time = clock();
     for (int i = 0; i < num_records; i++)
     {
@@ -68,14 +71,14 @@ int main()
 
     // --- Phase 4: 更新后的健康检查 ---
     printf("--- Phase 4: Health Check After Updates ---\n");
+    buf_flush_all();                        // 先刷盘确保所有修改都已生效
+    buf_init();                             // 用干净的缓存池进行检查
     b_tree_print_stats(space_id);           // 主B+树体检
-    secondary_b_tree_print_stats(space_id); // [新增] 辅助索引体检
+    secondary_b_tree_print_stats(space_id); // 辅助索引体检
 
     // --- Phase 5: 随机验证100万条数据的正确性 ---
     const int num_queries = 1000000;
-    printf("--- Phase 3: Verifying %d random records ---\n", num_queries);
-    buf_flush_all();
-    buf_init();
+    printf("--- Phase 5: Verifying %d random records ---\n", num_queries);
     srand(time(NULL));
 
     start_time = clock();

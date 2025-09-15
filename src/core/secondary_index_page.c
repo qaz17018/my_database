@@ -7,7 +7,7 @@
 
 int secondary_leaf_page_insert(uint32_t space_id, uint32_t page_no, SecondaryLeafPage *page, const SecondaryLeafEntry *entry)
 {
-    if (page->num_entries >= MAX_SECONDARY_INTERNAL_ENTRIES)
+    if (page->num_entries >= MAX_SECONDARY_LEAF_ENTRIES)
     {
         return -1; // 页已满
     }
