@@ -3,6 +3,7 @@
 #include "b_tree.h" // 需要引入它来获取Meta定义
 #include "buffer_pool.h"
 #include "secondary_index_page.h"
+#include "secondary_b_tree.h"
 
 // 声明内部函数
 static int secondary_b_tree_insert_internal(uint32_t space_id, uint32_t page_no, const SecondaryLeafEntry *entry,
@@ -13,6 +14,7 @@ static void handle_secondary_underflow(uint32_t space_id, uint32_t parent_page_n
 static void secondary_leaf_page_rebalance(uint32_t space_id, uint32_t parent_page_no, uint32_t left_no, uint32_t right_no);
 static void secondary_leaf_page_merge(uint32_t space_id, uint32_t parent_page_no, uint32_t left_no, uint32_t right_no);
 static void secondary_internal_page_delete_entry(uint32_t space_id, uint32_t page_no, SecondaryInternalPage *page, int entry_index);
+static int secondary_internal_page_get_child_index_by_page(SecondaryInternalPage *page, uint32_t child_page_no);
 
 // (这个文件的其余函数是为了辅助索引服务的，逻辑与b_tree.c类似，但使用字符串比较)
 
@@ -311,26 +313,9 @@ static void remove_child_entry_from_parent_secondary(uint32_t space_id, uint32_t
         return;
     SecondaryInternalPage *parent_page = (SecondaryInternalPage *)parent_frame->data;
 
-    int entry_index = -1;
-    // 使用 internal_page_get_child_index_by_page 的逻辑，但适配 secondary internal page
-    if (parent_page->first_child_page_no == child_page_no)
-    {
-        entry_index = -1; // Should not happen for a merge target
-    }
-    else
-    {
-        for (int i = 0; i < parent_page->num_entries; i++)
-        {
-            if (parent_page->entries[i].child_page_no == child_page_no)
-            {
-                entry_index = i;
-                break;
-            }
-        }
-    }
-
-    if (entry_index != -1)
-    {
+    int entry_index = secondary_internal_page_get_child_index_by_page(parent_page, child_page_no);
+    if (entry_index != -2)
+    { // -2 means not found
         secondary_internal_page_delete_entry(space_id, parent_page_no, parent_page, entry_index);
     }
 }
@@ -446,16 +431,8 @@ static void secondary_leaf_page_rebalance(uint32_t space_id, uint32_t parent_pag
     SecondaryLeafPage *left_page = (SecondaryLeafPage *)left_frame->data;
     SecondaryLeafPage *right_page = (SecondaryLeafPage *)right_frame->data;
 
-    int separator_index = -1; //
-    for (int i = 0; i < parent_page->num_entries; ++i)
-    {
-        if (parent_page->entries[i].child_page_no == right_no)
-        {
-            separator_index = i;
-            break;
-        }
-    }
-    if (separator_index == -1)
+    int separator_index = secondary_internal_page_get_child_index_by_page(parent_page, right_no);
+    if (separator_index == -2)
         return;
 
     if (left_page->num_entries < right_page->num_entries)
@@ -475,26 +452,189 @@ static void secondary_leaf_page_rebalance(uint32_t space_id, uint32_t parent_pag
     buf_mark_dirty(space_id, parent_page_no);
 }
 
+static void secondary_internal_page_merge(uint32_t space_id, uint32_t parent_page_no, uint32_t left_no, uint32_t right_no)
+{
+    BufferFrame *parent_frame = buf_get_frame(space_id, parent_page_no);
+    BufferFrame *left_frame = buf_get_frame(space_id, left_no);
+    BufferFrame *right_frame = buf_get_frame(space_id, right_no);
+    if (!parent_frame || !left_frame || !right_frame)
+        return;
+    SecondaryInternalPage *parent_page = (SecondaryInternalPage *)parent_frame->data;
+    SecondaryInternalPage *left_page = (SecondaryInternalPage *)left_frame->data;
+    SecondaryInternalPage *right_page = (SecondaryInternalPage *)right_frame->data;
+
+    int separator_index = secondary_internal_page_get_child_index_by_page(parent_page, right_no);
+    if (separator_index < 0)
+        return;
+
+    strcpy(left_page->entries[left_page->num_entries].key, parent_page->entries[separator_index].key);
+    left_page->entries[left_page->num_entries].child_page_no = right_page->first_child_page_no;
+    left_page->num_entries++;
+
+    memcpy(&left_page->entries[left_page->num_entries], right_page->entries, right_page->num_entries * sizeof(SecondaryInternalEntry));
+    left_page->num_entries += right_page->num_entries;
+
+    buf_mark_dirty(space_id, left_no);
+    remove_child_entry_from_parent_secondary(space_id, parent_page_no, right_no);
+}
+
+static void secondary_internal_page_rebalance(uint32_t space_id, uint32_t parent_page_no, uint32_t left_no, uint32_t right_no)
+{
+    BufferFrame *parent_frame = buf_get_frame(space_id, parent_page_no);
+    BufferFrame *left_frame = buf_get_frame(space_id, left_no);
+    BufferFrame *right_frame = buf_get_frame(space_id, right_no);
+    if (!parent_frame || !left_frame || !right_frame)
+        return;
+    SecondaryInternalPage *parent_page = (SecondaryInternalPage *)parent_frame->data;
+    SecondaryInternalPage *left_page = (SecondaryInternalPage *)left_frame->data;
+    SecondaryInternalPage *right_page = (SecondaryInternalPage *)right_frame->data;
+
+    int separator_index = secondary_internal_page_get_child_index_by_page(parent_page, right_no);
+    if (separator_index < 0)
+        return;
+
+    if (left_page->num_entries < right_page->num_entries)
+    {
+        strcpy(left_page->entries[left_page->num_entries].key, parent_page->entries[separator_index].key);
+        left_page->entries[left_page->num_entries].child_page_no = right_page->first_child_page_no;
+        left_page->num_entries++;
+
+        strcpy(parent_page->entries[separator_index].key, right_page->entries[0].key);
+        right_page->first_child_page_no = right_page->entries[0].child_page_no;
+        secondary_internal_page_delete_entry(space_id, right_no, right_page, 0);
+    }
+    else
+    {
+        secondary_internal_page_insert(space_id, right_no, right_page, parent_page->entries[separator_index].key, right_page->first_child_page_no);
+        right_page->first_child_page_no = left_page->entries[left_page->num_entries - 1].child_page_no;
+        strcpy(parent_page->entries[separator_index].key, left_page->entries[left_page->num_entries - 1].key);
+        secondary_internal_page_delete_entry(space_id, left_no, left_page, left_page->num_entries - 1);
+    }
+    buf_mark_dirty(space_id, parent_page_no);
+}
+
 // [新增] 辅助索引欠载处理调度
 static void handle_secondary_underflow(uint32_t space_id, uint32_t parent_page_no, uint32_t child_page_no)
 {
     if (parent_page_no == 0)
-        return; // 根节点不处理
+        return;
 
     BufferFrame *parent_frame = buf_get_frame(space_id, parent_page_no);
     if (!parent_frame)
         return;
     SecondaryInternalPage *parent_page = (SecondaryInternalPage *)parent_frame->data;
 
-    // TODO: 实现健壮的兄弟查找逻辑 (复刻 b_tree.c 中的 handle_underflow)
+    int child_index = secondary_internal_page_get_child_index_by_page(parent_page, child_page_no);
+    uint32_t left_s_no = 0, right_s_no = 0;
+
+    if (child_index == -1)
+    {
+        right_s_no = parent_page->num_entries > 0 ? parent_page->entries[0].child_page_no : 0;
+    }
+    else
+    {
+        left_s_no = (child_index == 0) ? parent_page->first_child_page_no : parent_page->entries[child_index - 1].child_page_no;
+        right_s_no = (child_index < parent_page->num_entries - 1) ? parent_page->entries[child_index + 1].child_page_no : 0;
+    }
 
     BufferFrame *child_frame = buf_get_frame(space_id, child_page_no);
     if (child_frame->page_type == PAGE_TYPE_SECONDARY_LEAF)
     {
-        // TODO: 根据兄弟节点的饱满度，决定调用 merge 还是 rebalance
+        if (left_s_no != 0)
+        {
+            BufferFrame *left_s_frame = buf_get_frame(space_id, left_s_no);
+            if ((((SecondaryLeafPage *)left_s_frame->data)->num_entries + ((SecondaryLeafPage *)child_frame->data)->num_entries) <= MAX_SECONDARY_LEAF_ENTRIES)
+            {
+                secondary_leaf_page_merge(space_id, parent_page_no, left_s_no, child_page_no);
+            }
+            else
+            {
+                secondary_leaf_page_rebalance(space_id, parent_page_no, left_s_no, child_page_no);
+            }
+        }
+        else if (right_s_no != 0)
+        {
+            BufferFrame *right_s_frame = buf_get_frame(space_id, right_s_no);
+            if ((((SecondaryLeafPage *)child_frame->data)->num_entries + ((SecondaryLeafPage *)right_s_frame->data)->num_entries) <= MAX_SECONDARY_LEAF_ENTRIES)
+            {
+                secondary_leaf_page_merge(space_id, parent_page_no, child_page_no, right_s_no);
+            }
+            else
+            {
+                secondary_leaf_page_rebalance(space_id, parent_page_no, child_page_no, right_s_no);
+            }
+        }
     }
     else
-    { // Internal Page
-      // TODO: 处理内节点的欠载
+    { // Internal node
+        if (left_s_no != 0)
+        {
+            BufferFrame *left_s_frame = buf_get_frame(space_id, left_s_no);
+            if ((((SecondaryInternalPage *)left_s_frame->data)->num_entries + ((SecondaryInternalPage *)child_frame->data)->num_entries) < MAX_SECONDARY_INTERNAL_ENTRIES)
+            {
+                secondary_internal_page_merge(space_id, parent_page_no, left_s_no, child_page_no);
+            }
+            else
+            {
+                secondary_internal_page_rebalance(space_id, parent_page_no, left_s_no, child_page_no);
+            }
+        }
+        else if (right_s_no != 0)
+        {
+            BufferFrame *right_s_frame = buf_get_frame(space_id, right_s_no);
+            if ((((SecondaryInternalPage *)child_frame->data)->num_entries + ((SecondaryInternalPage *)right_s_frame->data)->num_entries) < MAX_SECONDARY_INTERNAL_ENTRIES)
+            {
+                secondary_internal_page_merge(space_id, parent_page_no, child_page_no, right_s_no);
+            }
+            else
+            {
+                secondary_internal_page_rebalance(space_id, parent_page_no, child_page_no, right_s_no);
+            }
+        }
     }
+}
+
+/**
+ * @brief [新增] 辅助函数，通过子页号查找其在父节点中的索引
+ */
+static int secondary_internal_page_get_child_index_by_page(SecondaryInternalPage *page, uint32_t child_page_no)
+{
+    if (page->first_child_page_no == child_page_no)
+    {
+        return -1;
+    }
+    for (int i = 0; i < page->num_entries; i++)
+    {
+        if (page->entries[i].child_page_no == child_page_no)
+        {
+            return i;
+        }
+    }
+    return -2; // Not found
+}
+
+static int secondary_internal_page_insert(uint32_t space_id, uint32_t page_no, SecondaryInternalPage *page, const char *key, uint32_t child_page_no)
+{
+    if (page->num_entries >= MAX_SECONDARY_INTERNAL_ENTRIES)
+    {
+        return -1; // Should not happen if called correctly
+    }
+
+    int pos = 0;
+    while (pos < page->num_entries && strcmp(page->entries[pos].key, key) < 0)
+    {
+        pos++;
+    }
+
+    for (int i = page->num_entries; i > pos; i--)
+    {
+        page->entries[i] = page->entries[i - 1];
+    }
+
+    strcpy(page->entries[pos].key, key);
+    page->entries[pos].child_page_no = child_page_no;
+    page->num_entries++;
+
+    buf_mark_dirty(space_id, page_no);
+    return 0;
 }
