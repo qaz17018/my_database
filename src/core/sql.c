@@ -15,7 +15,21 @@ static PrepareResult prepare_select(char *input, Statement *statement)
         return PREPARE_SYNTAX_ERROR; // 必须有 where 子句
     }
 
-    // Case 1: 检查是否是按 id 查询
+    // Case 1: 检查是否是按 id 范围查询 (新增的、最高优先级的检查)
+    if (strstr(where_clause, "id >") && strstr(where_clause, "and id <"))
+    {
+        statement->params.select_statement.where_type = WHERE_BY_ID_RANGE;
+        int args_assigned = sscanf(where_clause, "where id > %d and id < %d",
+                                   &statement->params.select_statement.where_params.id_range.lower_bound,
+                                   &statement->params.select_statement.where_params.id_range.upper_bound);
+        if (args_assigned != 2)
+        {
+            return PREPARE_SYNTAX_ERROR;
+        }
+        return PREPARE_SUCCESS;
+    }
+
+    // Case 2: 检查是否是按 id 精确查询
     if (strstr(where_clause, "id ="))
     {
         statement->params.select_statement.where_type = WHERE_BY_ID;
@@ -28,7 +42,7 @@ static PrepareResult prepare_select(char *input, Statement *statement)
         return PREPARE_SUCCESS;
     }
 
-    // Case 2: 检查是否是按 username 查询
+    // Case 3: 检查是否是按 username 查询
     if (strstr(where_clause, "username ="))
     {
         statement->params.select_statement.where_type = WHERE_BY_USERNAME;
@@ -41,7 +55,7 @@ static PrepareResult prepare_select(char *input, Statement *statement)
         return PREPARE_SUCCESS;
     }
 
-    // 如果两种都不是，就是语法错误
+    // 如果以上都不是，就是语法错误
     return PREPARE_SYNTAX_ERROR;
 }
 
@@ -178,16 +192,18 @@ void execute_statement(uint32_t space_id, Statement *statement)
     {
         // [核心修改] 根据 where_type 执行不同的查询路径
         Row *row_found = NULL;
-        if (statement->params.select_statement.where_type == WHERE_BY_ID)
+        // [核心修改] 根据 where_type 执行不同的查询路径
+        switch (statement->params.select_statement.where_type)
         {
+        case WHERE_BY_ID:
             // 路径1：按ID查询
             uint32_t id = statement->params.select_statement.where_params.id;
             printf("Executing SELECT by id = %d\n", id);
             row_found = b_tree_search(space_id, id);
-        }
-        else if (statement->params.select_statement.where_type == WHERE_BY_USERNAME)
-        {
-            // 路径2：按用户名查询
+            break;
+
+        case WHERE_BY_USERNAME:
+            /// 路径2：按用户名查询
             char *username = statement->params.select_statement.where_params.username;
             printf("Executing SELECT by username = '%s'\n", username);
 
@@ -199,6 +215,17 @@ void execute_statement(uint32_t space_id, Statement *statement)
                 // 第2步：回表！拿着找到的主键ID，去主B+树查找完整的行
                 row_found = b_tree_search(space_id, pk_found);
             }
+            break;
+
+        // [新增] 范围查询的执行路径
+        case WHERE_BY_ID_RANGE:
+        {
+            uint32_t lower = statement->params.select_statement.where_params.id_range.lower_bound;
+            uint32_t upper = statement->params.select_statement.where_params.id_range.upper_bound;
+            printf("Executing SELECT for id > %d and id < %d\n", lower, upper);
+            b_tree_search_range(space_id, lower, upper);
+        }
+            return; // 范围查询自己处理打印，所以直接返回
         }
 
         // 统一处理查询结果

@@ -31,4 +31,7 @@ BTreeMeta *get_meta(uint32_t space_id);
 
 int table_update_row(uint32_t space_id, const Row *new_row);
 
+// [新增] 声明我们新的顶层范围查询函数
+void b_tree_search_range(uint32_t space_id, uint32_t lower_bound, uint32_t upper_bound);
+
 #endif

@@ -15,7 +15,8 @@ typedef enum
 typedef enum
 {
     WHERE_BY_ID,
-    WHERE_BY_USERNAME
+    WHERE_BY_USERNAME,
+    WHERE_BY_ID_RANGE // [新增] 代表ID范围查询
 } WhereClauseType;
 
 typedef struct
@@ -36,6 +37,13 @@ typedef struct
             {
                 uint32_t id;
                 char username[USERNAME_MAX_LEN];
+
+                // [新增] 为范围查询定义一个新的结构
+                struct
+                {
+                    uint32_t lower_bound; // ID下限
+                    uint32_t upper_bound; // ID上限
+                } id_range;
             } where_params;
         } select_statement;
 

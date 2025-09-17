@@ -723,3 +723,54 @@ int table_update_row(uint32_t space_id, const Row *new_row_data)
     buf_mark_dirty(space_id, leaf_page_no);
     return 0;
 }
+
+static void print_row(const Row *row)
+{
+    printf("(%d, %s, %s)\n", row->id, row->username, row->email);
+}
+
+// [新增] 范围查询的顶层实现
+void b_tree_search_range(uint32_t space_id, uint32_t lower_bound, uint32_t upper_bound)
+{
+    // 1. [定位起点] 首先，找到第一个可能包含 `lower_bound` 的叶子页
+    uint32_t current_page_no = b_tree_find_leaf_page(space_id, lower_bound);
+    if (current_page_no == 0)
+    {
+        printf("No records found in the given range.\n");
+        return;
+    }
+
+    int count = 0;
+    // 2. [横向扫描] 开始在叶子节点链表上进行扫描
+    while (current_page_no != 0)
+    {
+        BufferFrame *frame = buf_get_frame(space_id, current_page_no);
+        if (!frame)
+            break;
+        LeafPage *page = (LeafPage *)frame->data;
+
+        // 3. 在当前页内，遍历所有记录
+        for (int i = 0; i < page->num_records; i++)
+        {
+            // 如果记录的ID在指定的 [lower_bound, upper_bound) 区间内
+            if (page->records[i].id > lower_bound && page->records[i].id < upper_bound)
+            {
+                print_row(&page->records[i]);
+                count++;
+            }
+            // 如果记录的ID已经超出了上限，说明扫描可以结束了
+            if (page->records[i].id >= upper_bound)
+            {
+                current_page_no = 0; // 设置为0，以跳出外层while循环
+                break;
+            }
+        }
+
+        // 如果内层循环没有break，就继续移动到下一个叶子页
+        if (current_page_no != 0)
+        {
+            current_page_no = page->next_leaf;
+        }
+    }
+    printf("Found %d records in range (%d, %d).\n", count, lower_bound, upper_bound);
+}
