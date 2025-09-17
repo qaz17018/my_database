@@ -5,6 +5,7 @@
 #include "secondary_b_tree.h"
 #include <stdio.h>
 #include <string.h>
+#include "sql_utils.h"
 
 static int b_tree_insert_internal(uint32_t space_id, uint32_t page_no, const Row *row, uint32_t *out_split_key, uint32_t *out_new_page_no);
 static uint32_t b_tree_find_leaf_page_internal(uint32_t space_id, uint32_t page_no, uint32_t id);
@@ -724,13 +725,8 @@ int table_update_row(uint32_t space_id, const Row *new_row_data)
     return 0;
 }
 
-static void print_row(const Row *row)
-{
-    printf("(%d, %s, %s)\n", row->id, row->username, row->email);
-}
-
 // [新增] 范围查询的顶层实现
-void b_tree_search_range(uint32_t space_id, uint32_t lower_bound, uint32_t upper_bound)
+void b_tree_search_range(uint32_t space_id, uint32_t lower_bound, uint32_t upper_bound, const Statement *statement)
 {
     // 1. [定位起点] 首先，找到第一个可能包含 `lower_bound` 的叶子页
     uint32_t current_page_no = b_tree_find_leaf_page(space_id, lower_bound);
@@ -755,7 +751,7 @@ void b_tree_search_range(uint32_t space_id, uint32_t lower_bound, uint32_t upper
             // 如果记录的ID在指定的 [lower_bound, upper_bound) 区间内
             if (page->records[i].id > lower_bound && page->records[i].id < upper_bound)
             {
-                print_row(&page->records[i]);
+                print_projected_row(&page->records[i], statement);
                 count++;
             }
             // 如果记录的ID已经超出了上限，说明扫描可以结束了

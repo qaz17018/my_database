@@ -3,59 +3,106 @@
 #include "sql.h"
 #include "b_tree.h"
 #include "secondary_b_tree.h"
+#include "sql_utils.h"
 
 static PrepareResult prepare_select(char *input, Statement *statement)
 {
     statement->type = STATEMENT_SELECT;
+    statement->params.select_statement.num_columns_to_select = 0;
 
-    // 我们使用 strstr 来查找 "where" 子句的类型，这比 sscanf 更灵活
-    char *where_clause = strstr(input, "where");
-    if (!where_clause)
+    // --- 步骤1: 安全地分离出 "SELECT ...", "FROM ...", "WHERE ..." ---
+    // 定义我们需要的关键字
+    char *select_keyword = "select ";
+    char *from_keyword = " from ";
+    char *where_keyword = " where ";
+
+    // 使用 strstr 安全地查找关键字的位置，它不会修改字符串
+    char *from_ptr = strstr(input, from_keyword);
+    char *where_ptr = strstr(input, where_keyword);
+
+    // 如果找不到 'from' 或 'where'，说明语法不完整
+    if (!from_ptr || !where_ptr)
     {
-        return PREPARE_SYNTAX_ERROR; // 必须有 where 子句
+        return PREPARE_SYNTAX_ERROR;
     }
 
-    // Case 1: 检查是否是按 id 范围查询 (新增的、最高优先级的检查)
+    // --- 步骤2: 解析投影列表 (select 和 from 之间的部分) ---
+    // 计算列名列表字符串的长度
+    long columns_len = from_ptr - (input + strlen(select_keyword));
+    if (columns_len <= 0)
+        return PREPARE_SYNTAX_ERROR;
+
+    // [核心修复] 创建一个列名列表的“安全副本”
+    // 我们只对这个副本使用 strtok，从而保护原始的 input 字符串
+    char columns_str[columns_len + 1];
+    strncpy(columns_str, input + strlen(select_keyword), columns_len);
+    columns_str[columns_len] = '\0'; // 确保字符串正确结尾
+
+    char *column_token = strtok(columns_str, ", ");
+    while (column_token != NULL)
+    {
+        if (statement->params.select_statement.num_columns_to_select >= 3)
+            return PREPARE_SYNTAX_ERROR;
+
+        if (strcmp(column_token, "*") == 0)
+        {
+            statement->params.select_statement.columns_to_select[0] = COLUMN_ID;
+            statement->params.select_statement.columns_to_select[1] = COLUMN_USERNAME;
+            statement->params.select_statement.columns_to_select[2] = COLUMN_EMAIL;
+            statement->params.select_statement.num_columns_to_select = 3;
+            break;
+        }
+        else if (strcmp(column_token, "id") == 0)
+        {
+            statement->params.select_statement.columns_to_select[statement->params.select_statement.num_columns_to_select++] = COLUMN_ID;
+        }
+        else if (strcmp(column_token, "username") == 0)
+        {
+            statement->params.select_statement.columns_to_select[statement->params.select_statement.num_columns_to_select++] = COLUMN_USERNAME;
+        }
+        else if (strcmp(column_token, "email") == 0)
+        {
+            statement->params.select_statement.columns_to_select[statement->params.select_statement.num_columns_to_select++] = COLUMN_EMAIL;
+        }
+        else
+        {
+            return PREPARE_SYNTAX_ERROR;
+        }
+        column_token = strtok(NULL, ", ");
+    }
+    if (statement->params.select_statement.num_columns_to_select == 0)
+        return PREPARE_SYNTAX_ERROR;
+
+    // --- 步骤3: 解析 WHERE 子句 (现在 where_ptr 指向的是一个完好无损的 where 子句) ---
+    char *where_clause = where_ptr; // 直接使用 where_ptr
+
     if (strstr(where_clause, "id >") && strstr(where_clause, "and id <"))
     {
         statement->params.select_statement.where_type = WHERE_BY_ID_RANGE;
-        int args_assigned = sscanf(where_clause, "where id > %d and id < %d",
+        int args_assigned = sscanf(where_clause, " where id > %d and id < %d",
                                    &statement->params.select_statement.where_params.id_range.lower_bound,
                                    &statement->params.select_statement.where_params.id_range.upper_bound);
         if (args_assigned != 2)
-        {
             return PREPARE_SYNTAX_ERROR;
-        }
         return PREPARE_SUCCESS;
     }
-
-    // Case 2: 检查是否是按 id 精确查询
     if (strstr(where_clause, "id ="))
     {
         statement->params.select_statement.where_type = WHERE_BY_ID;
-        int args_assigned = sscanf(where_clause, "where id = %d",
-                                   &statement->params.select_statement.where_params.id);
+        int args_assigned = sscanf(where_clause, " where id = %d", &statement->params.select_statement.where_params.id);
         if (args_assigned != 1)
-        {
             return PREPARE_SYNTAX_ERROR;
-        }
         return PREPARE_SUCCESS;
     }
-
-    // Case 3: 检查是否是按 username 查询
     if (strstr(where_clause, "username ="))
     {
         statement->params.select_statement.where_type = WHERE_BY_USERNAME;
-        int args_assigned = sscanf(where_clause, "where username = '%[^']'",
-                                   statement->params.select_statement.where_params.username);
+        int args_assigned = sscanf(where_clause, " where username = '%[^']'", statement->params.select_statement.where_params.username);
         if (args_assigned != 1)
-        {
             return PREPARE_SYNTAX_ERROR;
-        }
         return PREPARE_SUCCESS;
     }
 
-    // 如果以上都不是，就是语法错误
     return PREPARE_SYNTAX_ERROR;
 }
 
@@ -166,12 +213,6 @@ PrepareResult prepare_statement(char *input, Statement *statement)
 
 Row *b_tree_search(uint32_t space_id, uint32_t id);
 
-// 一个辅助函数，用于打印查询到的行
-static void print_row(const Row *row)
-{
-    printf("(%d, %s, %s)\n", row->id, row->username, row->email);
-}
-
 // “后端”主函数：execute_statement
 void execute_statement(uint32_t space_id, Statement *statement)
 {
@@ -223,15 +264,15 @@ void execute_statement(uint32_t space_id, Statement *statement)
             uint32_t lower = statement->params.select_statement.where_params.id_range.lower_bound;
             uint32_t upper = statement->params.select_statement.where_params.id_range.upper_bound;
             printf("Executing SELECT for id > %d and id < %d\n", lower, upper);
-            b_tree_search_range(space_id, lower, upper);
+            b_tree_search_range(space_id, lower, upper, statement);
         }
             return; // 范围查询自己处理打印，所以直接返回
         }
 
-        // 统一处理查询结果
+        // [修改] 统一处理查询结果时，传入 statement
         if (row_found)
         {
-            print_row(row_found);
+            print_projected_row(row_found, statement);
         }
         else
         {

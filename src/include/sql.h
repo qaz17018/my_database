@@ -19,6 +19,14 @@ typedef enum
     WHERE_BY_ID_RANGE // [新增] 代表ID范围查询
 } WhereClauseType;
 
+// [新增] 定义一个枚举来代表所有可能的列
+typedef enum
+{
+    COLUMN_ID,
+    COLUMN_USERNAME,
+    COLUMN_EMAIL
+} ColumnType;
+
 typedef struct
 {
     StatementType type;
@@ -32,6 +40,10 @@ typedef struct
         // [核心修改] 升级 select 指令，让它能携带更复杂的查询条件
         struct
         {
+            // [核心修改] 为SELECT指令添加投影列表
+            ColumnType columns_to_select[3]; // 最多选择3列
+            int num_columns_to_select;       // 实际选择的列数
+
             WhereClauseType where_type; // 指明是按ID还是按username查
             union
             {
