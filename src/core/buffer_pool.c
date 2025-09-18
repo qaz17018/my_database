@@ -14,6 +14,9 @@ static struct
     BufferFrame *lru_tail;
 } g_buffer_pool;
 
+#define MAX_SPACES 100
+static uint32_t g_next_page_no_per_space[MAX_SPACES];
+
 // 组合 space_id 和 page_no 成为一个唯一的32位键
 // 这里我们假设 space_id 不会太大
 static uint32_t combine_key(uint32_t space_id, uint32_t page_no)
@@ -71,6 +74,11 @@ void buf_init()
     g_buffer_pool.hash_map = hash_table_create(MAX_BUFFER_POOL_PAGES * 2);
     g_buffer_pool.lru_head = NULL;
     g_buffer_pool.lru_tail = NULL;
+
+    // --- [THE FIX - Step 2] ---
+    // When the buffer pool is initialized, reset all page counters to 0.
+    memset(g_next_page_no_per_space, 0, sizeof(g_next_page_no_per_space));
+    // --- [END OF FIX - Step 2] ---
 }
 
 static int find_frame(uint32_t space_id, uint32_t page_no)
@@ -193,11 +201,21 @@ BufferFrame *buf_get_frame(uint32_t space_id, uint32_t page_no)
 // 分配新页操作
 BufferFrame *buf_alloc_frame(uint32_t space_id, PageType type, uint32_t *out_page_no)
 {
-    static uint32_t next_free_page = 0;
-    uint32_t page_no = next_free_page++;
-    *out_page_no = page_no;
+    // --- [THE FIX - Step 3] ---
+    // The global static counter is replaced by our new space-aware array.
+    // Ensure we don't exceed our max supported spaces.
+    if (space_id >= MAX_SPACES)
+    {
+        fprintf(stderr, "Error: space_id %u exceeds MAX_SPACES\n", space_id);
+        return NULL;
+    }
 
-    // 找一个空闲或被淘汰的缓冲块
+    // Get the next page number for THIS SPECIFIC space_id and then increment it.
+    uint32_t page_no = g_next_page_no_per_space[space_id]++;
+    *out_page_no = page_no;
+    // --- [END OF FIX - Step 3] ---
+
+    // Find a free or evictable buffer frame (this logic remains the same)
     BufferFrame *new_frame = NULL;
     for (int i = 0; i < MAX_BUFFER_POOL_PAGES; ++i)
     {
@@ -212,6 +230,7 @@ BufferFrame *buf_alloc_frame(uint32_t space_id, PageType type, uint32_t *out_pag
         new_frame = evict_frame();
     }
 
+    // Configure the new frame (this logic remains the same)
     memset(new_frame->data, 0, PAGE_DATA_SIZE);
     new_frame->space_id = space_id;
     new_frame->page_no = page_no;
@@ -219,11 +238,13 @@ BufferFrame *buf_alloc_frame(uint32_t space_id, PageType type, uint32_t *out_pag
     new_frame->is_used = 1;
     new_frame->page_type = type;
 
-    // 放入哈希表和链表头部
+    // Add to hash table and LRU list (this logic remains the same)
     int frame_idx = new_frame - g_buffer_pool.frames;
     hash_table_put(g_buffer_pool.hash_map, combine_key(space_id, page_no), frame_idx);
     lru_attach_to_head(new_frame);
 
+    // This immediate write is inefficient, but we'll optimize it later.
+    // For now, it's needed for correctness in our simple model.
     write_page(space_id, page_no, type, new_frame->data);
 
     return new_frame;
