@@ -69,4 +69,4 @@ $(MAIN_OBJ): $(MAIN_SRC)
 clean:
 	@echo "==> Cleaning up..."
 	@rm -rf out obj
-	@rm -f mydb.data # 同时也删除数据库文件
+	@rm -f table_* # 同时也删除数据库文件

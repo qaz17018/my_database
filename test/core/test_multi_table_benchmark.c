@@ -6,6 +6,10 @@
 #include "row.h"
 #include "io_stats.h" // 引入我们的统计工具
 
+// We need to tell this file about our new cache functions from page.c
+void file_cache_init();
+void file_cache_flush_all();
+
 int main()
 {
     printf("========================================================\n");
@@ -16,8 +20,15 @@ int main()
     const int RECORDS_PER_TABLE = 1000; // 为了初次运行更快，我们先用一个较小的值
 
     // --- 在开始任何操作前，清空旧的数据库文件 ---
-    remove("mydb.data");
+    // Clean up any old database files from previous runs
+    for (int i = 0; i < NUM_TABLES; i++)
+    {
+        char filename_to_delete[256];
+        sprintf(filename_to_delete, "table_%u.db", i + 1);
+        remove(filename_to_delete);
+    }
     buf_init();
+    file_cache_init(); // <--- [ADD THIS LINE] Initialize the file cache
 
     // --- Phase 1: 写入数据到 10 个不同的表中 ---
     printf("--- Phase 1: Inserting %d records into %d tables ---\n", RECORDS_PER_TABLE, NUM_TABLES);
@@ -44,6 +55,7 @@ int main()
     clock_t end_time = clock();
     double time_spent = (double)(end_time - start_time) / CLOCKS_PER_SEC;
     printf("Insertion complete in %.2f seconds.\n", time_spent);
+    file_cache_flush_all();
     io_stats_print();
 
     // --- Phase 2: 从 10 个表中随机读取数据 ---
@@ -52,6 +64,7 @@ int main()
     srand(time(NULL));
 
     io_stats_init();
+    file_cache_init();
     start_time = clock();
 
     for (int i = 0; i < NUM_QUERIES; i++)
@@ -66,6 +79,7 @@ int main()
     end_time = clock();
     time_spent = (double)(end_time - start_time) / CLOCKS_PER_SEC;
     printf("Random reads complete in %.2f seconds.\n", time_spent);
+    file_cache_flush_all();
     io_stats_print();
 
     return 0;
