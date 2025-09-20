@@ -104,7 +104,7 @@ int internal_page_insert(uint32_t space_id, uint32_t page_no, InternalPage *page
     page->entries[pos].child_page_no = child_page_no;
     page->num_entries++;
 
-    // buf_mark_dirty(space_id, page_no);
+    buf_mark_dirty(space_id, page_no, 0);
 
     return 0;
 }
@@ -139,7 +139,7 @@ int internal_page_insert(uint32_t space_id, uint32_t page_no, InternalPage *page
     {
         BTreeMeta *meta = (BTreeMeta *)meta_frame->data;
         meta->total_pages++;
-        // buf_mark_dirty(space_id, 0);
+        buf_mark_dirty(space_id, 0, 0);
     }
 
     // 2. 为了容纳新建，我们先创建一个临时的大数组
@@ -174,8 +174,8 @@ int internal_page_insert(uint32_t space_id, uint32_t page_no, InternalPage *page
     new_page->first_child_page_no = temp_entries[mid_idx].child_page_no;
     memcpy(new_page->entries, &temp_entries[mid_idx + 1], new_page->num_entries * sizeof(InternalEntry));
     // 6. 标记两个页都为脏页
-    // buf_mark_dirty(space_id, page_no);
-    // buf_mark_dirty(space_id, new_page_no);
+    buf_mark_dirty(space_id, page_no, 0);
+    buf_mark_dirty(space_id, new_page_no, 0);
 
     return 0;
 } */
@@ -250,7 +250,7 @@ int internal_page_insert_or_split(uint32_t space_id, uint32_t page_no, uint32_t 
     if (meta_frame)
     {
         ((BTreeMeta *)meta_frame->data)->total_pages++;
-        // buf_mark_dirty(space_id, 0);
+        buf_mark_dirty(space_id, 0, 0);
     }
 
     // --- 核心邏輯：用分裂後的前半部分重寫老頁 ---
@@ -284,7 +284,7 @@ int internal_page_insert_or_split(uint32_t space_id, uint32_t page_no, uint32_t 
     }
 
     // 9. 標記髒頁
-    // buf_mark_dirty(space_id, page_no);
+    buf_mark_dirty(space_id, page_no, 0);
     // buf_alloc_frame 已經將新頁標記為髒頁
 
     return 0;
@@ -345,5 +345,5 @@ void internal_page_delete_entry(uint32_t space_id, uint32_t page_no, InternalPag
         page->entries[i] = page->entries[i + 1];
     }
     page->num_entries--;
-    // buf_mark_dirty(space_id, page_no);
+    buf_mark_dirty(space_id, page_no, 0);
 }

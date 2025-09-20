@@ -63,7 +63,7 @@ int b_tree_create(uint32_t space_id)
     meta->total_pages = 2; // 现在我们有了0号（meta）和1号（root）两个页
 
     // 4. 将元数据的修改登记在案（标记为脏页），以便写回磁盘
-    // buf_mark_dirty(space_id, meta_page_no);
+    buf_mark_dirty(space_id, meta_page_no, 0);
 
     printf("B+Tree created for space %u. Meta Page: %u, Root Page (Leaf): %u\n",
            space_id, meta_page_no, root_page_no);
@@ -184,7 +184,7 @@ int b_tree_insert(uint32_t space_id, const Row *row)
         // ...
         meta->root_page_no = new_root_page_no;
         // 你可以继续保持下面这行的注释状态
-        // buf_mark_dirty(space_id, 0, 0);
+        buf_mark_dirty(space_id, 0, 0);
 
         // 新根节点指向原来的老根（现在是左孩子）和分裂出的新页（右孩子）
         new_root->first_child_page_no = root_page_no;
@@ -194,7 +194,7 @@ int b_tree_insert(uint32_t space_id, const Row *row)
 
         // 更新meta信息，指向新的根
         meta->root_page_no = new_root_page_no;
-        // buf_mark_dirty(space_id, 0);
+        buf_mark_dirty(space_id, 0, 0);
         printf("New root is an INTERNAL page: %u. Tree height increased.\n", new_root_page_no);
     }
     return 0;
@@ -363,9 +363,9 @@ static void leaf_page_redistribute(uint32_t space_id, uint32_t parent_page_no, I
     }
 
     // 标记所有被修改的页为脏页
-    // buf_mark_dirty(space_id, parent_page_no);
-    // buf_mark_dirty(space_id, underflow_page_no);
-    // buf_mark_dirty(space_id, donor_page_no);
+    buf_mark_dirty(space_id, parent_page_no, 0);
+    buf_mark_dirty(space_id, underflow_page_no, 0);
+    buf_mark_dirty(space_id, donor_page_no, 0);
 }
 
 // [新增] 合并两个叶子节点的实现
@@ -383,7 +383,7 @@ static void leaf_page_merge(uint32_t space_id, uint32_t parent_page_no,
     left_page->num_records += right_page->num_records;
     left_page->next_leaf = right_page->next_leaf;
 
-    // buf_mark_dirty(space_id, left_page_no);
+    buf_mark_dirty(space_id, left_page_no, 0);
 
     // [核心] 调用新的、按值（子页号）删除的函数
     remove_entry_from_parent(space_id, parent_page_no, right_page_no);
@@ -496,9 +496,9 @@ static void internal_page_redistribute(uint32_t space_id, uint32_t parent_page_n
         donor_page->num_entries--;
     }
 
-    // buf_mark_dirty(space_id, parent_page_no);
-    // buf_mark_dirty(space_id, underflow_page_no);
-    // buf_mark_dirty(space_id, donor_page_no);
+    buf_mark_dirty(space_id, parent_page_no, 0);
+    buf_mark_dirty(space_id, underflow_page_no, 0);
+    buf_mark_dirty(space_id, donor_page_no, 0);
 }
 
 // [新增] 合并两个内节点的实现
@@ -529,7 +529,7 @@ static void internal_page_merge(uint32_t space_id, uint32_t parent_page_no,
     memcpy(&left_page->entries[left_page->num_entries], right_page->entries, right_page->num_entries * sizeof(InternalEntry));
     left_page->num_entries += right_page->num_entries;
 
-    // buf_mark_dirty(space_id, left_page_no);
+    buf_mark_dirty(space_id, left_page_no, 0);
 
     // [核心] 调用新的、按值（子页号）删除的函数
     remove_entry_from_parent(space_id, parent_page_no, right_page_no);
@@ -674,7 +674,7 @@ int table_delete_row(uint32_t space_id, uint32_t id_to_delete)
     {
         uint32_t new_root_page_no = ((InternalPage *)root_frame->data)->first_child_page_no;
         meta->root_page_no = new_root_page_no;
-        // buf_mark_dirty(space_id, 0);
+        buf_mark_dirty(space_id, 0, 0);
         printf("Tree height decreased. New root is page %u\n", new_root_page_no);
     }
     return 0;
@@ -726,7 +726,7 @@ int table_update_row(uint32_t space_id, const Row *new_row_data)
 
     // 更新主B+树数据
     page->records[record_index] = *new_row_data;
-    // buf_mark_dirty(space_id, leaf_page_no);
+    buf_mark_dirty(space_id, leaf_page_no, 0);
     return 0;
 }
 

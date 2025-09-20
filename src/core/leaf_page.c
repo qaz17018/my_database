@@ -53,7 +53,7 @@ int leaf_page_insert(uint32_t space_id, uint32_t page_no, LeafPage *page, const 
     page->num_records++;
 
     // 5. 标记页为脏，并更新页的 LSN
-    // buf_mark_dirty(space_id, page_no, lsn); // <--- [修改] 传递 LSN
+    buf_mark_dirty(space_id, page_no, lsn); // <--- [修改] 传递 LSN
 
     return 0;
 }
@@ -118,7 +118,7 @@ int leaf_page_insert_or_split(uint32_t space_id, uint32_t page_no, const Row *ro
     {
         BTreeMeta *meta = (BTreeMeta *)meta_frame->data;
         meta->total_pages++;
-        // buf_mark_dirty(space_id, 0);
+        buf_mark_dirty(space_id, 0, 0);
     }
 
     frame = buf_get_frame(space_id, page_no); // 重新获取，因为buf_alloc_frame可能导致其被淘汰
@@ -201,7 +201,7 @@ int leaf_page_delete(uint32_t space_id, uint32_t page_no, LeafPage *page, uint32
     page->num_records--;
 
     // 5. 将页面标记为“脏”，以便写回磁盘
-    // buf_mark_dirty(space_id, page_no);
+    buf_mark_dirty(space_id, page_no, 0);
 
     // TODO: 在这里检查页面是否因为删除而变得“欠载”(underflow)
     // 如果 page->num_records < MAX_LEAF_RECORDS / 2，就需要进行合并或重分配
