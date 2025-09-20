@@ -1,8 +1,10 @@
 #include "leaf_page.h"
 #include "b_tree.h"
 #include "buffer_pool.h"
+#include "log_manager.h"
 #include <string.h>
 #include <stdio.h>
+#include <stddef.h> // <--- [新增] 引入 offsetof 宏
 
 int leaf_page_insert(uint32_t space_id, uint32_t page_no, LeafPage *page, const Row *row)
 {
@@ -28,14 +30,30 @@ int leaf_page_insert(uint32_t space_id, uint32_t page_no, LeafPage *page, const 
     }
     pos = left;
 
+    // --- [WAL 核心改造] ---
+    // 1. 先为“插入新行”这个操作写日志
+    //    我们记录的是将要写入的新行数据
+    uint64_t lsn = log_append_update_record(space_id, page_no,
+                                            offsetof(LeafPage, records[pos]),
+                                            sizeof(Row),
+                                            row);
+
+    // 2. 再为“移动旧行”写日志（如果需要的话）
+    //    为简化，我们暂时只记录最终状态，高级的 WAL 会记录更精细的操作
+    //    这里我们先只记录新行的日志
+
+    // 3. 在内存中移动数据
     for (int i = page->num_records; i > pos; i--)
     {
         page->records[i] = page->records[i - 1];
     }
+
+    // 4. 在内存中插入新行
     page->records[pos] = *row;
     page->num_records++;
 
-    buf_mark_dirty(space_id, page_no);
+    // 5. 标记页为脏，并更新页的 LSN
+    // buf_mark_dirty(space_id, page_no, lsn); // <--- [修改] 传递 LSN
 
     return 0;
 }
@@ -100,7 +118,7 @@ int leaf_page_insert_or_split(uint32_t space_id, uint32_t page_no, const Row *ro
     {
         BTreeMeta *meta = (BTreeMeta *)meta_frame->data;
         meta->total_pages++;
-        buf_mark_dirty(space_id, 0);
+        // buf_mark_dirty(space_id, 0);
     }
 
     frame = buf_get_frame(space_id, page_no); // 重新获取，因为buf_alloc_frame可能导致其被淘汰
@@ -183,7 +201,7 @@ int leaf_page_delete(uint32_t space_id, uint32_t page_no, LeafPage *page, uint32
     page->num_records--;
 
     // 5. 将页面标记为“脏”，以便写回磁盘
-    buf_mark_dirty(space_id, page_no);
+    // buf_mark_dirty(space_id, page_no);
 
     // TODO: 在这里检查页面是否因为删除而变得“欠载”(underflow)
     // 如果 page->num_records < MAX_LEAF_RECORDS / 2，就需要进行合并或重分配

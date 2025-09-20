@@ -70,3 +70,4 @@ clean:
 	@echo "==> Cleaning up..."
 	@rm -rf out obj
 	@rm -f table_* # 同时也删除数据库文件
+	@rm -f *.log

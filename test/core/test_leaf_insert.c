@@ -18,7 +18,7 @@ int main()
     leaf_page_insert(page, &r2);
     leaf_page_insert(page, &r3);
 
-    buf_mark_dirty(space_id, 0);
+    // buf_mark_dirty(space_id, 0);
     buf_flush_all();
 
     buf_init();

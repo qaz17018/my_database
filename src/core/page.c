@@ -104,7 +104,7 @@ static long long page_offset(uint32_t page_no)
     return (long long)page_no * PAGE_SIZE;
 }
 
-int write_page(uint32_t space_id, uint32_t page_no, PageType type, const void *data)
+int write_page(uint32_t space_id, uint32_t page_no, PageType type, const void *data, uint64_t lsn)
 {
     FILE *fp = get_file_handle(space_id, "r+b");
     if (!fp)
@@ -119,7 +119,7 @@ int write_page(uint32_t space_id, uint32_t page_no, PageType type, const void *d
         return -2;
     }
 
-    PageHeader header = {space_id, page_no, type, 0};
+    PageHeader header = {space_id, page_no, type, 0, lsn};
     g_io_stats.fwrite_calls++;
     fwrite(&header, 1, PAGE_HEADER_SIZE, fp);
     fwrite(data, 1, PAGE_DATA_SIZE, fp);

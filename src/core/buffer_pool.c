@@ -133,18 +133,21 @@ static BufferFrame *evict_frame()
 
     if (victim->is_dirty)
     {
-        write_page(victim->space_id, victim->page_no, victim->page_type, victim->data);
+        write_page(victim->space_id, victim->page_no, victim->page_type, victim->data, victim->lsn);
     }
     victim->is_used = 0;
     maintain_old_gen_head(); // 移除后需要重新计算中点
     return victim;
 }
 
-void buf_mark_dirty(uint32_t space_id, uint32_t page_no)
+void buf_mark_dirty(uint32_t space_id, uint32_t page_no, uint64_t lsn) // <--- 修改签名
 {
     int idx = hash_table_get(g_buffer_pool.hash_map, combine_key(space_id, page_no));
     if (idx >= 0)
+    {
         g_buffer_pool.frames[idx].is_dirty = 1;
+        g_buffer_pool.frames[idx].lsn = lsn; // <--- 记录 LSN
+    }
 }
 
 void buf_flush_all()
@@ -153,7 +156,7 @@ void buf_flush_all()
     {
         if (g_buffer_pool.frames[i].is_used && g_buffer_pool.frames[i].is_dirty)
         {
-            write_page(g_buffer_pool.frames[i].space_id, g_buffer_pool.frames[i].page_no, g_buffer_pool.frames[i].page_type, g_buffer_pool.frames[i].data);
+            write_page(g_buffer_pool.frames[i].space_id, g_buffer_pool.frames[i].page_no, g_buffer_pool.frames[i].page_type, g_buffer_pool.frames[i].data, g_buffer_pool.frames[i].lsn);
             g_buffer_pool.frames[i].is_dirty = 0;
         }
     }
@@ -289,6 +292,11 @@ BufferFrame *buf_alloc_frame(uint32_t space_id, PageType type, uint32_t *out_pag
     new_frame->page_type = type;
     new_frame->first_access_time = clock(); // 同样记录时间
 
+    // --- [新增的修复] ---
+    // 一个全新的页面，它的初始 LSN 应该是 0
+    new_frame->lsn = 0;
+    // --- [END OF FIX] ---
+
     g_buffer_pool.size++;
     lru_attach_to_midpoint(new_frame); // 新分配的页也进入中点
     maintain_old_gen_head();
@@ -296,7 +304,7 @@ BufferFrame *buf_alloc_frame(uint32_t space_id, PageType type, uint32_t *out_pag
     int frame_idx = new_frame - g_buffer_pool.frames;
     hash_table_put(g_buffer_pool.hash_map, combine_key(space_id, page_no), frame_idx);
 
-    write_page(space_id, page_no, type, new_frame->data);
+    write_page(space_id, page_no, type, new_frame->data, new_frame->lsn);
 
     return new_frame;
 }

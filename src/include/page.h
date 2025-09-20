@@ -22,12 +22,14 @@ typedef struct
     uint32_t page_no;
     uint16_t page_type;
     uint16_t reserved;
+    // 记录修改此页的最后一条日志的 LSN
+    uint64_t page_lsn;
 } PageHeader;
 
 #define PAGE_HEADER_SIZE sizeof(PageHeader)
 #define PAGE_DATA_SIZE (PAGE_SIZE - PAGE_HEADER_SIZE)
 
-int write_page(uint32_t space_id, uint32_t page_no, PageType type, const void *data);
+int write_page(uint32_t space_id, uint32_t page_no, PageType type, const void *data, uint64_t lsn);
 int read_page(uint32_t space_id, uint32_t page_no, void *buf, PageHeader *out_header);
 
 #endif

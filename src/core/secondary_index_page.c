@@ -44,7 +44,7 @@ int secondary_leaf_page_insert(uint32_t space_id, uint32_t page_no, SecondaryLea
     // 插入新条目
     page->entries[pos] = *entry;
     page->num_entries++;
-    buf_mark_dirty(space_id, page_no);
+    // buf_mark_dirty(space_id, page_no);
 
     return 0;
 }
@@ -130,6 +130,6 @@ int secondary_leaf_page_delete(uint32_t space_id, uint32_t page_no, SecondaryLea
         page->entries[i] = page->entries[i + 1];
     }
     page->num_entries--;
-    buf_mark_dirty(space_id, page_no);
+    // buf_mark_dirty(space_id, page_no);
     return 0; // 成功
 }

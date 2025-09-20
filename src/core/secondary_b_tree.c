@@ -38,7 +38,7 @@ static int secondary_internal_page_insert_or_split(uint32_t space_id, uint32_t p
         strcpy(page->entries[pos].key, key);
         page->entries[pos].child_page_no = child_page_no;
         page->num_entries++;
-        buf_mark_dirty(space_id, page_no);
+        // buf_mark_dirty(space_id, page_no);
         return 0;
     }
 
@@ -82,7 +82,7 @@ static int secondary_internal_page_insert_or_split(uint32_t space_id, uint32_t p
     *out_new_page_no = new_page_no;
     SecondaryInternalPage *new_page = (SecondaryInternalPage *)new_frame->data;
     ((BTreeMeta *)buf_get_frame(space_id, 0)->data)->total_pages++;
-    buf_mark_dirty(space_id, 0);
+    // buf_mark_dirty(space_id, 0);
 
     // 4. 用分裂后的前半部分，重写老页
     page->num_entries = mid_idx;
@@ -102,7 +102,7 @@ static int secondary_internal_page_insert_or_split(uint32_t space_id, uint32_t p
         new_page->entries[i].child_page_no = all_children[mid_idx + 2 + i];
     }
 
-    buf_mark_dirty(space_id, page_no);
+    // buf_mark_dirty(space_id, page_no);
     return 0;
 }
 
@@ -134,7 +134,7 @@ static int secondary_leaf_page_insert_or_split(uint32_t space_id, uint32_t page_
     {
         BTreeMeta *meta = (BTreeMeta *)meta_frame->data;
         meta->total_pages++;
-        buf_mark_dirty(space_id, 0);
+        // buf_mark_dirty(space_id, 0);
     }
 
     frame = buf_get_frame(space_id, page_no); // 重新获取，因为buf_alloc_frame可能导致其被淘汰
@@ -176,12 +176,21 @@ int secondary_b_tree_insert(uint32_t space_id, const SecondaryLeafEntry *entry)
     if (meta->username_idx_root_page_no == 0)
     {
         uint32_t root_page_no;
-        buf_alloc_frame(space_id, PAGE_TYPE_SECONDARY_LEAF, &root_page_no);
-        meta_frame = buf_get_frame(space_id, 0);
-        meta = (BTreeMeta *)meta_frame->data;
+        BufferFrame *root_frame = buf_alloc_frame(space_id, PAGE_TYPE_SECONDARY_LEAF, &root_page_no);
+        if (!root_frame)
+            return -1;
+
+        // --- [在这里添加修改] ---
+        // 关键修复：在 buf_alloc_frame 之后，重新获取 meta 指针，因为它可能已失效
+        meta = get_meta(space_id);
+        if (!meta)
+            return -1;
+        // --- [修改结束] ---
+
         meta->username_idx_root_page_no = root_page_no;
         meta->total_pages++;
-        buf_mark_dirty(space_id, 0);
+        // 你可以继续保持下面这行的注释状态
+        // buf_mark_dirty(space_id, 0, 0);
     }
 
     uint32_t root_page_no = meta->username_idx_root_page_no;
@@ -198,8 +207,15 @@ int secondary_b_tree_insert(uint32_t space_id, const SecondaryLeafEntry *entry)
         if (!new_root_frame)
             return -1;
 
-        ((BTreeMeta *)buf_get_frame(space_id, 0)->data)->total_pages++;
-        buf_mark_dirty(space_id, 0);
+        // --- [在这里添加修改] ---
+        // 同样的，重新获取 meta 指针
+        meta = get_meta(space_id);
+        if (!meta)
+            return -1;
+        // --- [修改结束] ---
+
+        meta->total_pages++;
+        // buf_mark_dirty(space_id, 0);
 
         SecondaryInternalPage *new_root = (SecondaryInternalPage *)new_root_frame->data;
         new_root->first_child_page_no = old_root_page_no;
@@ -209,7 +225,7 @@ int secondary_b_tree_insert(uint32_t space_id, const SecondaryLeafEntry *entry)
 
         meta = (BTreeMeta *)buf_get_frame(space_id, 0)->data;
         meta->username_idx_root_page_no = new_root_page_no;
-        buf_mark_dirty(space_id, 0);
+        // buf_mark_dirty(space_id, 0);
     }
     return 0;
 }
@@ -386,7 +402,7 @@ int secondary_b_tree_delete(uint32_t space_id, const char *key, uint32_t primary
     if (root_frame && root_frame->page_type == PAGE_TYPE_SECONDARY_INTERNAL && ((SecondaryInternalPage *)root_frame->data)->num_entries == 0)
     {
         meta->username_idx_root_page_no = ((SecondaryInternalPage *)root_frame->data)->first_child_page_no;
-        buf_mark_dirty(space_id, 0);
+        // buf_mark_dirty(space_id, 0);
     }
     return 0;
 }
@@ -400,7 +416,7 @@ static void secondary_internal_page_delete_entry(uint32_t space_id, uint32_t pag
         page->entries[i] = page->entries[i + 1];
     }
     page->num_entries--;
-    buf_mark_dirty(space_id, page_no);
+    // buf_mark_dirty(space_id, page_no);
 }
 
 static void secondary_leaf_page_merge(uint32_t space_id, uint32_t parent_page_no, uint32_t left_no, uint32_t right_no)
@@ -416,7 +432,7 @@ static void secondary_leaf_page_merge(uint32_t space_id, uint32_t parent_page_no
     left_page->num_entries += right_page->num_entries;
     left_page->next_leaf = right_page->next_leaf;
 
-    buf_mark_dirty(space_id, left_no);
+    // buf_mark_dirty(space_id, left_no);
     remove_child_entry_from_parent_secondary(space_id, parent_page_no, right_no);
 }
 
@@ -449,7 +465,7 @@ static void secondary_leaf_page_rebalance(uint32_t space_id, uint32_t parent_pag
         secondary_leaf_page_insert(space_id, right_no, right_page, &entry_to_move);
         strcpy(parent_page->entries[separator_index].key, right_page->entries[0].key);
     }
-    buf_mark_dirty(space_id, parent_page_no);
+    // buf_mark_dirty(space_id, parent_page_no);
 }
 
 static void secondary_internal_page_merge(uint32_t space_id, uint32_t parent_page_no, uint32_t left_no, uint32_t right_no)
@@ -474,7 +490,7 @@ static void secondary_internal_page_merge(uint32_t space_id, uint32_t parent_pag
     memcpy(&left_page->entries[left_page->num_entries], right_page->entries, right_page->num_entries * sizeof(SecondaryInternalEntry));
     left_page->num_entries += right_page->num_entries;
 
-    buf_mark_dirty(space_id, left_no);
+    // buf_mark_dirty(space_id, left_no);
     remove_child_entry_from_parent_secondary(space_id, parent_page_no, right_no);
 }
 
@@ -510,7 +526,7 @@ static void secondary_internal_page_rebalance(uint32_t space_id, uint32_t parent
         strcpy(parent_page->entries[separator_index].key, left_page->entries[left_page->num_entries - 1].key);
         secondary_internal_page_delete_entry(space_id, left_no, left_page, left_page->num_entries - 1);
     }
-    buf_mark_dirty(space_id, parent_page_no);
+    // buf_mark_dirty(space_id, parent_page_no);
 }
 
 // [新增] 辅助索引欠载处理调度
@@ -635,6 +651,6 @@ static int secondary_internal_page_insert(uint32_t space_id, uint32_t page_no, S
     page->entries[pos].child_page_no = child_page_no;
     page->num_entries++;
 
-    buf_mark_dirty(space_id, page_no);
+    // buf_mark_dirty(space_id, page_no);
     return 0;
 }

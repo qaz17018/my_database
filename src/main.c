@@ -3,6 +3,7 @@
 #include <string.h>
 #include "include/sql.h"
 #include "include/buffer_pool.h" // 注意这里的路径
+#include "include/log_manager.h" // <--- [新增]
 
 // 打印命令行提示符
 void print_prompt()
@@ -15,6 +16,11 @@ int main(int argc, char *argv[])
     // 初始化存储引擎
     const uint32_t DB_SPACE_ID = 1;
     buf_init();
+    if (log_manager_init("my_db.log") != 0)
+    { // <--- [新增]
+        fprintf(stderr, "Failed to initialize log manager.\n");
+        return 1;
+    }
 
     char input_buffer[256];
 
@@ -36,7 +42,8 @@ int main(int argc, char *argv[])
         if (strcmp(input_buffer, ".exit") == 0)
         {
             printf("Bye!\n");
-            buf_flush_all(); // 退出前确保所有数据都已保存
+            buf_flush_all();        // 退出前确保所有数据都已保存
+            log_manager_shutdown(); // <--- [新增]
             break;
         }
 
