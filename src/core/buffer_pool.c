@@ -1,13 +1,17 @@
 #include "buffer_pool.h"
 #include "hash_table.h"
-#include "b_tree.h" // [新增] 引入 b_tree.h 以獲取 BTreeMeta 的定義
+#include "b_tree.h" // 需要 BTreeMeta
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <stdbool.h> // [新增] 引入布爾類型
 
-// [移除] 不再需要這個易失的全局數組
-// #define MAX_SPACES 100
-// static uint32_t g_next_page_no_per_space[MAX_SPACES];
+#define MAX_SPACES 100
+
+// [恢復] 重新啟用全局頁號計數器
+static uint32_t g_next_page_no_per_space[MAX_SPACES];
+// [新增] 增加一個標誌位數組，用於判斷 space 是否已經從磁盤恢復過大小
+static bool g_space_initialized[MAX_SPACES];
 
 // --- [innodb_old_blocks_time 实现] ---
 #define LRU_OLD_PCT 37 // 老生代区域占比 37%
@@ -23,6 +27,41 @@ static struct
     int size;
     BufferFrame *old_gen_head; // 指向老生代的头部（中点）
 } g_buffer_pool;
+
+// [修正] 內部輔助函數：從磁盤恢復 space 的頁計數器
+static void buf_recover_space_size(uint32_t space_id)
+{
+    if (space_id >= MAX_SPACES || g_space_initialized[space_id])
+    {
+        return; // 如果超出範圍或已初始化，則直接返回
+    }
+
+    PageHeader header;
+    // [修正] 聲明一個足夠大的、能夠容納整個頁數據的緩衝區
+    char page_data_buffer[PAGE_DATA_SIZE];
+
+    // 將數據讀入這個安全的、足夠大的緩衝區
+    if (read_page(space_id, 0, page_data_buffer, &header) == 0)
+    {
+        // 如果讀取成功，說明數據庫文件已存在
+
+        // [修正] 將緩衝區的起始地址轉換為 BTreeMeta 指針來安全地訪問數據
+        BTreeMeta *meta = (BTreeMeta *)page_data_buffer;
+
+        // 用持久化的 total_pages 來初始化內存計數器
+        g_next_page_no_per_space[space_id] = meta->total_pages;
+
+        printf("Recovered space %u: next page will be %u.\n", space_id, meta->total_pages);
+    }
+    else
+    {
+        // 如果讀取失敗（很可能是文件不存在），則計數器保持為 0，這是新文件的正確狀態
+        g_next_page_no_per_space[space_id] = 0;
+    }
+
+    // 無論成功與否，都將其標記為已初始化，避免重復檢查
+    g_space_initialized[space_id] = true;
+}
 
 static uint32_t combine_key(uint32_t space_id, uint32_t page_no)
 {
@@ -120,8 +159,9 @@ void buf_init()
     g_buffer_pool.lru_tail = NULL;
     g_buffer_pool.size = 0;
     g_buffer_pool.old_gen_head = NULL;
-    // [移除] 不再需要重置這個易失的數組
-    // memset(g_next_page_no_per_space, 0, sizeof(g_next_page_no_per_space));
+    // [修改] 初始化時，重置我們的兩個狀態數組
+    memset(g_next_page_no_per_space, 0, sizeof(g_next_page_no_per_space));
+    memset(g_space_initialized, 0, sizeof(g_space_initialized));
 }
 
 static BufferFrame *evict_frame()
@@ -143,7 +183,7 @@ static BufferFrame *evict_frame()
     return victim;
 }
 
-void buf_mark_dirty(uint32_t space_id, uint32_t page_no, uint64_t lsn) // <--- 修改签名
+void buf_mark_dirty(uint32_t space_id, uint32_t page_no, uint64_t lsn)
 {
     int idx = hash_table_get(g_buffer_pool.hash_map, combine_key(space_id, page_no));
     if (idx >= 0)
@@ -171,6 +211,9 @@ void buf_flush_all()
 
 BufferFrame *buf_get_frame(uint32_t space_id, uint32_t page_no)
 {
+    // [新增] 在訪問任何頁之前，都先嘗試恢復一次計數器
+    buf_recover_space_size(space_id);
+
     int idx = hash_table_get(g_buffer_pool.hash_map, combine_key(space_id, page_no));
     if (idx >= 0)
     { // 缓存命中
@@ -261,30 +304,21 @@ BufferFrame *buf_get_frame(uint32_t space_id, uint32_t page_no)
     return new_frame;
 }
 
-// [核心改造] 重寫 buf_alloc_frame 函數
+// [恢復] 恢復 buf_alloc_frame 至使用全局計數器的版本
 BufferFrame *buf_alloc_frame(uint32_t space_id, PageType type, uint32_t *out_page_no)
 {
-    // 步驟 1: 獲取元數據頁 (page 0) 來決定新的頁號
-    BufferFrame *meta_frame = buf_get_frame(space_id, 0);
-    if (!meta_frame)
+    if (space_id >= MAX_SPACES)
     {
-        // 這通常只會在數據庫第一次創建時發生，此時 B-Tree 結構還不存在
-        // b_tree_create 函數會手動處理 0 號和 1 號頁的分配
-        // 在正常運行中，meta_frame 必須存在
-        fprintf(stderr, "Error: Cannot allocate page, B-Tree metadata not found for space %u.\n", space_id);
         return NULL;
     }
-    BTreeMeta *meta = (BTreeMeta *)meta_frame->data;
 
-    // 步驟 2: 決定新頁的頁號，並更新元數據
-    uint32_t new_page_no = meta->total_pages;
-    *out_page_no = new_page_no;
+    // [新增] 在分配新頁之前，也先嘗試恢復一次計數器
+    buf_recover_space_size(space_id);
 
-    meta->total_pages++;
-    // 將元數據頁標記為髒頁，確保頁計數器的增長被持久化
-    buf_mark_dirty(space_id, 0, 0);
+    // 使用全局計數器來分配新頁號
+    uint32_t page_no = g_next_page_no_per_space[space_id]++;
+    *out_page_no = page_no;
 
-    // 步驟 3: 為新頁在緩衝池中找到一個 Frame (沿用舊邏輯)
     BufferFrame *new_frame = NULL;
     if (g_buffer_pool.size < MAX_BUFFER_POOL_PAGES)
     {
@@ -304,16 +338,16 @@ BufferFrame *buf_alloc_frame(uint32_t space_id, PageType type, uint32_t *out_pag
 
     if (!new_frame)
     {
-        // 如果找不到可用的 frame，需要回滾計數器
-        meta->total_pages--;
+        // 如果分配 frame 失敗，回滾計數器
+        g_next_page_no_per_space[space_id]--;
         return NULL;
     }
 
     // 步驟 4: 初始化新 Frame 的屬性
     memset(new_frame->data, 0, PAGE_DATA_SIZE);
     new_frame->space_id = space_id;
-    new_frame->page_no = new_page_no;
-    new_frame->is_dirty = 1; // 新分配的頁總是髒的
+    new_frame->page_no = page_no;
+    new_frame->is_dirty = 1;
     new_frame->is_used = 1;
     new_frame->page_type = type;
     new_frame->first_access_time = clock();
@@ -325,11 +359,11 @@ BufferFrame *buf_alloc_frame(uint32_t space_id, PageType type, uint32_t *out_pag
     maintain_old_gen_head();
 
     int frame_idx = new_frame - g_buffer_pool.frames;
-    hash_table_put(g_buffer_pool.hash_map, combine_key(space_id, new_page_no), frame_idx);
+    hash_table_put(g_buffer_pool.hash_map, combine_key(space_id, page_no), frame_idx);
 
-    // 注意：我們不再需要在分配時立即寫盤 (write_page)，
-    // Buffer Pool 的換出機制或 `buf_flush_all` 會負責將它寫入磁盤。
-    // 這一步的省略可以提升性能。
+    // 我們可以選擇在这里立即寫盤來保證文件空間被佔用，也可以不寫，
+    // 依賴於後續的刷盤。為了簡單和安全，我們保留初始的寫盤操作。
+    write_page(space_id, page_no, type, new_frame->data, new_frame->lsn);
 
     return new_frame;
 }

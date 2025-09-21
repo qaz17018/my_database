@@ -172,6 +172,13 @@ int internal_page_insert_or_split(uint32_t space_id, uint32_t page_no, uint32_t 
     *out_new_page_no = new_page_no;
     InternalPage *new_page = (InternalPage *)new_frame->data;
 
+    BufferFrame *meta_frame = buf_get_frame(space_id, 0);
+    if (meta_frame)
+    {
+        ((BTreeMeta *)meta_frame->data)->total_pages++;
+        buf_mark_dirty(space_id, 0, 0);
+    }
+
     // --- 核心邏輯：用分裂後的前半部分重寫老頁 ---
     page->num_entries = mid_idx;
     // 老頁的 first_child_page_no 維持不變, 它就是 all_children[0]

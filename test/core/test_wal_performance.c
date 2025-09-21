@@ -14,7 +14,7 @@ int main()
     printf("||       Benchmark: Write-Ahead Log Performance       ||\n");
     printf("========================================================\n\n");
 
-    const int NUM_INSERTS = 20000; // Let's do 20,000 inserts
+    const int NUM_INSERTS = 3000000; // Let's do 20,000 inserts
 
     // --- Phase 1: Performance WITHOUT WAL benefit (current state) ---
     // In this phase, we write to the log AND still flush all dirty pages.

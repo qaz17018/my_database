@@ -60,6 +60,7 @@ int b_tree_create(uint32_t space_id)
     // 初始化元数据，让它指向我们刚刚创建的根节点
     meta->root_page_no = root_page_no;
     meta->username_idx_root_page_no = 0;
+    meta->total_pages = 2; // 現在我們有了0號（meta）和1號（root）兩個頁
 
     // 4. 将元数据的修改登记在案（标记为脏页），以便写回磁盘
     buf_mark_dirty(space_id, meta_page_no, 0);
@@ -178,7 +179,23 @@ int b_tree_insert(uint32_t space_id, const Row *row)
             return -1;
         // --- [修改结束] ---
 
-        // ...
+        // [修改] 這裡不再是 ++，而是用最新的計數器值更新元數據
+        // g_next_page_no_per_space 在 buf_alloc_frame 內部已經自增
+        // 我們假設 g_next_page_no_per_space 能夠通過某種方式獲取
+        // 為了簡單起見，我們知道 buf_alloc_frame 分配了一個頁，所以這裡 просто +1
+        // 但最健壯的方式是在 buf_alloc_frame 返回後，用計數器的當前值更新 meta
+        // 暫時我們先用一個簡單的邏輯
+        // meta->total_pages++; <--- 之前的邏輯
+
+        // 更穩健的邏輯是 B-Tree 層不關心具體頁號如何來，
+        // 它只知道自己調用了一次 buf_alloc_frame。
+        // 而 buf_alloc_frame 內部已經更新了 g_next_page_no_per_space。
+        // b_tree 層的職責是把最新的計數寫回 meta_page。
+        // 我們可以在 b_tree_insert 的末尾統一更新。
+        // 但為了最小化修改，我們先保留分裂時更新的邏輯。
+        // 此處我們恢復 `meta->total_pages++` 的邏輯，因為分裂確實增加了一個頁。
+        meta->total_pages++;
+
         meta->root_page_no = new_root_page_no;
         // 你可以继续保持下面这行的注释状态
         buf_mark_dirty(space_id, 0, 0);
