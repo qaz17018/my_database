@@ -60,7 +60,6 @@ int b_tree_create(uint32_t space_id)
     // 初始化元数据，让它指向我们刚刚创建的根节点
     meta->root_page_no = root_page_no;
     meta->username_idx_root_page_no = 0;
-    meta->total_pages = 2; // 现在我们有了0号（meta）和1号（root）两个页
 
     // 4. 将元数据的修改登记在案（标记为脏页），以便写回磁盘
     buf_mark_dirty(space_id, meta_page_no, 0);
@@ -178,8 +177,6 @@ int b_tree_insert(uint32_t space_id, const Row *row)
         if (!meta)
             return -1;
         // --- [修改结束] ---
-
-        meta->total_pages++;
 
         // ...
         meta->root_page_no = new_root_page_no;

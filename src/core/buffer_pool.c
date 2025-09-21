@@ -1,11 +1,13 @@
 #include "buffer_pool.h"
 #include "hash_table.h"
+#include "b_tree.h" // [新增] 引入 b_tree.h 以獲取 BTreeMeta 的定義
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
 
-#define MAX_SPACES 100
-static uint32_t g_next_page_no_per_space[MAX_SPACES];
+// [移除] 不再需要這個易失的全局數組
+// #define MAX_SPACES 100
+// static uint32_t g_next_page_no_per_space[MAX_SPACES];
 
 // --- [innodb_old_blocks_time 实现] ---
 #define LRU_OLD_PCT 37 // 老生代区域占比 37%
@@ -118,7 +120,8 @@ void buf_init()
     g_buffer_pool.lru_tail = NULL;
     g_buffer_pool.size = 0;
     g_buffer_pool.old_gen_head = NULL;
-    memset(g_next_page_no_per_space, 0, sizeof(g_next_page_no_per_space));
+    // [移除] 不再需要重置這個易失的數組
+    // memset(g_next_page_no_per_space, 0, sizeof(g_next_page_no_per_space));
 }
 
 static BufferFrame *evict_frame()
@@ -146,7 +149,11 @@ void buf_mark_dirty(uint32_t space_id, uint32_t page_no, uint64_t lsn) // <--- �
     if (idx >= 0)
     {
         g_buffer_pool.frames[idx].is_dirty = 1;
-        g_buffer_pool.frames[idx].lsn = lsn; // <--- 记录 LSN
+        // [修改] 只有当新的 LSN 更大时才更新，这是 ARIES 恢复算法中的一个重要细节
+        if (lsn > g_buffer_pool.frames[idx].lsn)
+        {
+            g_buffer_pool.frames[idx].lsn = lsn;
+        }
     }
 }
 
@@ -241,6 +248,7 @@ BufferFrame *buf_get_frame(uint32_t space_id, uint32_t page_no)
     new_frame->page_type = header.page_type;
     new_frame->is_used = 1;
     new_frame->is_dirty = 0;
+    new_frame->lsn = header.page_lsn;       // [新增] 从页头恢复 page_lsn
     new_frame->first_access_time = clock(); // 记录首次访问时间
 
     g_buffer_pool.size++;
@@ -253,15 +261,30 @@ BufferFrame *buf_get_frame(uint32_t space_id, uint32_t page_no)
     return new_frame;
 }
 
+// [核心改造] 重寫 buf_alloc_frame 函數
 BufferFrame *buf_alloc_frame(uint32_t space_id, PageType type, uint32_t *out_page_no)
 {
-    if (space_id >= MAX_SPACES)
+    // 步驟 1: 獲取元數據頁 (page 0) 來決定新的頁號
+    BufferFrame *meta_frame = buf_get_frame(space_id, 0);
+    if (!meta_frame)
     {
+        // 這通常只會在數據庫第一次創建時發生，此時 B-Tree 結構還不存在
+        // b_tree_create 函數會手動處理 0 號和 1 號頁的分配
+        // 在正常運行中，meta_frame 必須存在
+        fprintf(stderr, "Error: Cannot allocate page, B-Tree metadata not found for space %u.\n", space_id);
         return NULL;
     }
-    uint32_t page_no = g_next_page_no_per_space[space_id]++;
-    *out_page_no = page_no;
+    BTreeMeta *meta = (BTreeMeta *)meta_frame->data;
 
+    // 步驟 2: 決定新頁的頁號，並更新元數據
+    uint32_t new_page_no = meta->total_pages;
+    *out_page_no = new_page_no;
+
+    meta->total_pages++;
+    // 將元數據頁標記為髒頁，確保頁計數器的增長被持久化
+    buf_mark_dirty(space_id, 0, 0);
+
+    // 步驟 3: 為新頁在緩衝池中找到一個 Frame (沿用舊邏輯)
     BufferFrame *new_frame = NULL;
     if (g_buffer_pool.size < MAX_BUFFER_POOL_PAGES)
     {
@@ -281,30 +304,32 @@ BufferFrame *buf_alloc_frame(uint32_t space_id, PageType type, uint32_t *out_pag
 
     if (!new_frame)
     {
+        // 如果找不到可用的 frame，需要回滾計數器
+        meta->total_pages--;
         return NULL;
     }
 
+    // 步驟 4: 初始化新 Frame 的屬性
     memset(new_frame->data, 0, PAGE_DATA_SIZE);
     new_frame->space_id = space_id;
-    new_frame->page_no = page_no;
-    new_frame->is_dirty = 1;
+    new_frame->page_no = new_page_no;
+    new_frame->is_dirty = 1; // 新分配的頁總是髒的
     new_frame->is_used = 1;
     new_frame->page_type = type;
-    new_frame->first_access_time = clock(); // 同样记录时间
+    new_frame->first_access_time = clock();
+    new_frame->lsn = 0; // 一個全新的頁面，它的初始 LSN 應該是 0
 
-    // --- [新增的修复] ---
-    // 一个全新的页面，它的初始 LSN 应该是 0
-    new_frame->lsn = 0;
-    // --- [END OF FIX] ---
-
+    // 步驟 5: 將新 Frame 加入 LRU 鏈表和哈希表
     g_buffer_pool.size++;
-    lru_attach_to_midpoint(new_frame); // 新分配的页也进入中点
+    lru_attach_to_midpoint(new_frame); // 新分配的頁也進入中點
     maintain_old_gen_head();
 
     int frame_idx = new_frame - g_buffer_pool.frames;
-    hash_table_put(g_buffer_pool.hash_map, combine_key(space_id, page_no), frame_idx);
+    hash_table_put(g_buffer_pool.hash_map, combine_key(space_id, new_page_no), frame_idx);
 
-    write_page(space_id, page_no, type, new_frame->data, new_frame->lsn);
+    // 注意：我們不再需要在分配時立即寫盤 (write_page)，
+    // Buffer Pool 的換出機制或 `buf_flush_all` 會負責將它寫入磁盤。
+    // 這一步的省略可以提升性能。
 
     return new_frame;
 }

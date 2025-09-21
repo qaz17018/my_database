@@ -87,8 +87,6 @@ static int secondary_internal_page_insert_or_split(uint32_t space_id, uint32_t p
         return -1;
     *out_new_page_no = new_page_no;
     SecondaryInternalPage *new_page = (SecondaryInternalPage *)new_frame->data;
-    ((BTreeMeta *)buf_get_frame(space_id, 0)->data)->total_pages++;
-    buf_mark_dirty(space_id, 0, 0);
 
     // 4. 用分裂后的前半部分，重写老页
     page->num_entries = mid_idx;
@@ -133,15 +131,6 @@ static int secondary_leaf_page_insert_or_split(uint32_t space_id, uint32_t page_
         return -1;
     *out_new_page_no = new_page_no;
     SecondaryLeafPage *new_page = (SecondaryLeafPage *)new_frame->data;
-
-    // [核心修复-1] 在成功分配新页后，更新元数据
-    BufferFrame *meta_frame = buf_get_frame(space_id, 0);
-    if (meta_frame)
-    {
-        BTreeMeta *meta = (BTreeMeta *)meta_frame->data;
-        meta->total_pages++;
-        buf_mark_dirty(space_id, 0, 0);
-    }
 
     frame = buf_get_frame(space_id, page_no); // 重新获取，因为buf_alloc_frame可能导致其被淘汰
     if (!frame)
@@ -194,7 +183,6 @@ int secondary_b_tree_insert(uint32_t space_id, const SecondaryLeafEntry *entry)
         // --- [修改结束] ---
 
         meta->username_idx_root_page_no = root_page_no;
-        meta->total_pages++;
         // 你可以继续保持下面这行的注释状态
         buf_mark_dirty(space_id, 0, 0);
     }
@@ -219,8 +207,6 @@ int secondary_b_tree_insert(uint32_t space_id, const SecondaryLeafEntry *entry)
         if (!meta)
             return -1;
         // --- [修改结束] ---
-
-        meta->total_pages++;
 
         SecondaryInternalPage *new_root = (SecondaryInternalPage *)new_root_frame->data;
         new_root->first_child_page_no = old_root_page_no;
